@@ -1,0 +1,92 @@
+Sample output
+=============
+
+A full run against example.com on Linux. Colors and the live spinner appear only
+on an interactive terminal, so redirected output like this is plain text. Output
+is grouped into separated, severity-free sections, ready to drop into a report.
+
+
+$ vantage example.com --all
+vantage - web security scanner
+Target: https://example.com
+HTTP 200
+
+== DNS records (example.com) ===================================
+  A     Address: 172.66.147.243
+  A     Address: 104.20.23.154
+  AAAA  Address: 2606:4700:10::6814:179a
+  AAAA  Address: 2606:4700:10::ac42:93f3
+  NS    example.com	nameserver = hera.ns.cloudflare.com.
+  NS    example.com	nameserver = elliott.ns.cloudflare.com.
+  MX    example.com	mail exchanger = 0 .
+  TXT   example.com	text = "_k2n1y4vw3qtb4skdx9e7dxt97qrmmq9"
+  TXT   example.com	text = "v=spf1 -all"
+  SOA   origin = elliott.ns.cloudflare.com
+  CNAME origin = elliott.ns.cloudflare.com
+
+== nmap --script vulners (example.com) =========================
+  $ nmap -Pn -sV -p 80,443,8080,8443,8000,8008,8888,3000,5000,9000 --script vulners example.com
+  PORT     STATE    SERVICE        VERSION
+  80/tcp   open     http           Cloudflare http proxy
+  |_http-server-header: cloudflare
+  443/tcp  open     ssl/http       Cloudflare http proxy
+  |_http-server-header: cloudflare
+  3000/tcp filtered ppp
+  5000/tcp filtered upnp
+  8000/tcp filtered http-alt
+  8008/tcp filtered http
+  8080/tcp open     http           Cloudflare http proxy
+  |_http-server-header: cloudflare
+  8443/tcp open     ssl/http       Cloudflare http proxy
+  |_http-server-header: cloudflare
+  8888/tcp filtered sun-answerbook
+  9000/tcp filtered cslistener
+  + no CVEs reported for the detected service versions
+
+== HTTP headers ================================================
+  11 response headers
+  accept-ranges: bytes
+  age: 6665
+  allow: GET, HEAD
+  cf-cache-status: HIT
+  cf-ray: a1093b177d250ce1-ORD
+  connection: keep-alive
+  content-type: text/html
+  date: Wed, 24 Jun 2026 05:11:16 GMT
+  last-modified: Sat, 20 Jun 2026 20:45:06 GMT
+  server: cloudflare
+  transfer-encoding: chunked
+
+  security headers
+  - strict-transport-security  (HSTS - forces HTTPS)
+  - content-security-policy  (CSP - mitigates XSS / injection)
+  - x-frame-options  (clickjacking protection)
+  - x-content-type-options  (MIME-sniffing protection)
+  - referrer-policy  (controls referrer leakage)
+  - permissions-policy  (restricts powerful browser features)
+  - cross-origin-opener-policy  (COOP)
+  - cross-origin-embedder-policy  (COEP)
+  - cross-origin-resource-policy  (CORP)
+
+== Cookies =====================================================
+    no Set-Cookie headers
+
+== CORS ========================================================
+    no Access-Control-Allow-Origin header
+
+== Information disclosure ======================================
+  server: cloudflare
+
+== Content-Security-Policy =====================================
+  - no Content-Security-Policy header
+
+== HSTS (Strict-Transport-Security) ============================
+  - no Strict-Transport-Security header
+
+== HTTP methods ================================================
+  Allow: (none returned to OPTIONS)
+  allowed  200  GET
+  allowed  200  HEAD
+  blocked  405  OPTIONS
+  blocked  405  TRACE
+    POST/PUT/DELETE/PATCH not probed; pass --active to include them
