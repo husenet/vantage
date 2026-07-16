@@ -146,7 +146,9 @@ vantage app.example.com --basic "admin:s3cret"
 ```
 
 Credentials go on every request. It warns you if you send them over plaintext
-`http://`.
+`http://`. The cookie check singles out any cookie you pass with `--cookie`: if
+the server re-issues it, its Secure/HttpOnly/SameSite flags are graded; if not,
+it says so, since those flags only show up on the server's `Set-Cookie`.
 
 ## License
 

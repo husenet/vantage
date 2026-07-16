@@ -125,6 +125,7 @@ struct Plan {
     methods: bool,
     active: bool,
     port_spec: Option<String>,
+    auth_cookies: Vec<String>,
 }
 
 impl Plan {
@@ -196,6 +197,7 @@ pub fn run() -> i32 {
         methods: on(args.methods),
         active: args.active,
         port_spec,
+        auth_cookies: cookie_names(&args.cookie),
     };
 
     let headers = match net::build_headers(
@@ -313,6 +315,21 @@ pub fn run() -> i32 {
     }
 }
 
+/// Pull the cookie names out of the --cookie values (each may hold several
+/// "name=value" pairs separated by ';').
+fn cookie_names(cookies: &[String]) -> Vec<String> {
+    let mut names = Vec::new();
+    for c in cookies {
+        for pair in c.split(';') {
+            let name = pair.split('=').next().unwrap_or("").trim();
+            if !name.is_empty() {
+                names.push(name.to_string());
+            }
+        }
+    }
+    names
+}
+
 /// A one-line summary of the supplied credentials, for the banner.
 fn auth_summary(args: &Args) -> String {
     let mut bits = Vec::new();
@@ -385,7 +402,7 @@ fn scan_one(
                     sections.push(checks::headers(&f));
                 }
                 if plan.cookies {
-                    sections.push(checks::cookies(&f));
+                    sections.push(checks::cookies(&f, &plan.auth_cookies));
                 }
                 if plan.cors {
                     sections.push(checks::cors(&f));

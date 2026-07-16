@@ -48,15 +48,15 @@ pub fn headers(f: &Fetched) -> Section {
     sec
 }
 
-pub fn cookies(f: &Fetched) -> Section {
+pub fn cookies(f: &Fetched, auth_cookies: &[String]) -> Section {
     let mut sec = Section::new("Cookies");
     let cks = f.get_all("set-cookie");
-    if cks.is_empty() {
-        sec.note("no Set-Cookie headers");
-        return sec;
-    }
+    let mut seen: Vec<String> = Vec::new();
+
     for c in &cks {
         let name = c.split('=').next().unwrap_or("").trim();
+        seen.push(name.to_string());
+        let is_auth = auth_cookies.iter().any(|a| a.eq_ignore_ascii_case(name));
         let low = c.to_lowercase();
         let mut missing = Vec::new();
         if f.is_https && !low.contains("secure") {
@@ -68,11 +68,30 @@ pub fn cookies(f: &Fetched) -> Section {
         if !low.contains("samesite") {
             missing.push("SameSite");
         }
-        if missing.is_empty() {
-            sec.good(&format!("{name} - Secure, HttpOnly, SameSite all set"));
+        let label = if is_auth {
+            format!("{name} (auth cookie)")
         } else {
-            sec.bad(&format!("{name} - missing {}", missing.join(", ")));
+            name.to_string()
+        };
+        if missing.is_empty() {
+            sec.good(&format!("{label} - Secure, HttpOnly, SameSite all set"));
+        } else {
+            sec.bad(&format!("{label} - missing {}", missing.join(", ")));
         }
+    }
+
+    // Auth cookies we sent but the server did not re-issue: their flags are set
+    // by the server on Set-Cookie, so a plain request cookie carries none to check.
+    for a in auth_cookies {
+        if !seen.iter().any(|n| n.eq_ignore_ascii_case(a)) {
+            sec.bad(&format!(
+                "{a} (auth cookie) not re-issued here; can't confirm Secure/HttpOnly/SameSite - check the login response"
+            ));
+        }
+    }
+
+    if cks.is_empty() && auth_cookies.is_empty() {
+        sec.note("no Set-Cookie headers");
     }
     sec
 }
