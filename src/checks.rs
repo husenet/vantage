@@ -316,18 +316,6 @@ pub fn auth_effect(
 
 pub fn methods(url: &str, active: bool, cfg: &net::HttpConfig, rate: &mut RateLimiter) -> Section {
     let mut sec = Section::new("HTTP methods");
-    let allow = net::request("OPTIONS", url, cfg, rate)
-        .ok()
-        .and_then(|r| {
-            r.headers()
-                .get("allow")
-                .and_then(|v| v.to_str().ok())
-                .map(|s| s.to_string())
-        });
-    match &allow {
-        Some(a) => sec.text(format!("  Allow: {a}")),
-        None => sec.text("  Allow: (none returned to OPTIONS)"),
-    }
 
     let mut probe = vec!["GET", "HEAD", "OPTIONS", "TRACE"];
     if active {
@@ -344,9 +332,6 @@ pub fn methods(url: &str, active: bool, cfg: &net::HttpConfig, rate: &mut RateLi
             s::dim("blocked")
         };
         sec.text(format!("  {}  {:>3}  {}", mark, code, s::bold(m)));
-        if m == "TRACE" && allowed {
-            sec.bad("TRACE enabled (XST risk)");
-        }
     }
     if !active {
         sec.note("POST/PUT/DELETE/PATCH not probed; pass --active to include them");
