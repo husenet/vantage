@@ -6,7 +6,7 @@ use reqwest::Method;
 use std::thread;
 use std::time::{Duration, Instant};
 
-pub const USER_AGENT: &str = "vantage/0.5 (+https://github.com/husenet/vantage)";
+pub const USER_AGENT: &str = "vantage/0.6 (+https://github.com/husenet/vantage)";
 
 /// Shared request settings: timeout, TLS strictness, and the default headers
 /// (User-Agent plus any auth the user passed).

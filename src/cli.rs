@@ -2,7 +2,7 @@
 
 use crate::section::{print_section, Section};
 use crate::{checks, net, report, style};
-use clap::Parser;
+use clap::{CommandFactory, FromArgMatches, Parser};
 use std::io::IsTerminal;
 
 #[derive(Parser)]
@@ -10,14 +10,14 @@ use std::io::IsTerminal;
     name = "vantage",
     version,
     about = "Web security scanner",
-    override_usage = "vantage <domain> [--flags]",
+    override_usage = "vantage <domain>... [--flags]",
     // Running `vantage` with no arguments at all prints help instead of scanning.
     arg_required_else_help = true,
     after_help = "With no module flags, runs the default HTTP audit (headers, cookies, cors, disclosure, csp, hsts, caching)."
 )]
 struct Args {
-    /// domain or URL to scan (scheme optional; defaults to https). Optional if --targets is given.
-    domain: Option<String>,
+    /// domain(s) or URL(s) to scan (scheme optional; defaults to https). Multiple allowed; optional if --targets is given.
+    domains: Vec<String>,
 
     /// run every check
     #[arg(long)]
@@ -151,7 +151,19 @@ struct TargetResult {
 }
 
 pub fn run() -> i32 {
-    let args = Args::parse();
+    // Decide color before parsing so the banner shown in --help is colored on a
+    // terminal and plain when piped or with --no-color/--json.
+    let raw: Vec<String> = std::env::args().collect();
+    let color = !raw.iter().any(|a| a == "--no-color" || a == "--json")
+        && std::io::stdout().is_terminal();
+    style::set_color(color);
+
+    // Attach the banner to the top of --help.
+    let matches = Args::command().before_help(banner()).get_matches();
+    let args = match Args::from_arg_matches(&matches) {
+        Ok(a) => a,
+        Err(e) => e.exit(),
+    };
     style::set_color(!args.no_color && !args.json && std::io::stdout().is_terminal());
 
     let module_flags = [
@@ -229,11 +241,8 @@ pub fn run() -> i32 {
         || args.bearer.is_some()
         || args.basic.is_some();
 
-    // Resolve the target list: the positional domain plus any --targets file.
-    let mut targets: Vec<String> = Vec::new();
-    if let Some(d) = &args.domain {
-        targets.push(d.clone());
-    }
+    // Resolve the target list: the positional domains plus any --targets file.
+    let mut targets: Vec<String> = args.domains.clone();
     if let Some(file) = &args.targets {
         match std::fs::read_to_string(file) {
             Ok(txt) => {
@@ -330,11 +339,19 @@ const BANNER_RGB: [(u8, u8, u8); 5] = [
     (232, 121, 249),
 ];
 
+/// The gradient banner as a single multi-line string (used for both the live
+/// scan output and the top of --help).
+fn banner() -> String {
+    BANNER
+        .iter()
+        .zip(BANNER_RGB.iter())
+        .map(|(line, &(r, g, b))| style::rgb(r, g, b, line))
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
 fn print_banner() {
-    for (line, &(r, g, b)) in BANNER.iter().zip(BANNER_RGB.iter()) {
-        println!("{}", style::rgb(r, g, b, line));
-    }
-    println!();
+    println!("{}\n", banner());
 }
 
 /// Pull the cookie names out of the --cookie values (each may hold several

@@ -343,7 +343,7 @@ pub fn methods(url: &str, active: bool, cfg: &net::HttpConfig, rate: &mut RateLi
         } else {
             s::dim("blocked")
         };
-        sec.text(format!("  {}  {}  {}", mark, code, s::bold(m)));
+        sec.text(format!("  {}  {:>3}  {}", mark, code, s::bold(m)));
         if m == "TRACE" && allowed {
             sec.bad("TRACE enabled (XST risk)");
         }

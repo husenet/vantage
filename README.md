@@ -9,6 +9,7 @@ sections that read well in a report.
 
 ```
 vantage example.com                      # default HTTP audit
+vantage example.com example.org          # several targets at once
 vantage example.com --all                # everything
 vantage example.com --dnsrecon --nmap    # just those checks
 vantage example.com --vulners            # nmap -sV --script vulners
