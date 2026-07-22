@@ -9,7 +9,6 @@ use std::io::IsTerminal;
 #[command(
     name = "vantage",
     version,
-    about = "Web security scanner",
     override_usage = "vantage <domain>... [--flags]",
     // Running `vantage` with no arguments at all prints help instead of scanning.
     arg_required_else_help = true,
@@ -270,12 +269,15 @@ pub fn run() -> i32 {
     let mut rate = net::RateLimiter::new(args.rate);
     let multi = targets.len() > 1;
 
-    if !args.json && authenticated {
-        println!(
-            "{} {}",
-            style::bold("Authenticated:"),
-            style::dim(&auth_summary(&args))
-        );
+    if !args.json {
+        print_banner();
+        if authenticated {
+            println!(
+                "{} {}",
+                style::bold("Authenticated:"),
+                style::dim(&auth_summary(&args))
+            );
+        }
     }
 
     let mut results: Vec<TargetResult> = Vec::new();
@@ -292,7 +294,6 @@ pub fn run() -> i32 {
                     style::red("  warning: sending credentials over plaintext http://")
                 );
             }
-            print_banner();
         }
 
         let result = scan_one(&url, &plan, &cfg, &mut rate, authenticated, args.json);
@@ -322,32 +323,38 @@ pub fn run() -> i32 {
     }
 }
 
-/// Block-letter "VANTAGE", printed below the target with a teal-to-magenta
-/// vertical gradient (one color per row).
-const BANNER: [&str; 5] = [
-    "█   █  ███  █   █ █████  ███   ████ █████",
-    "█   █ █   █ ██  █   █   █   █ █     █    ",
-    "█   █ █████ █ █ █   █   █████ █ ███ ████ ",
-    " █ █  █   █ █  ██   █   █   █ █   █ █    ",
-    "  █   █   █ █   █   █   █   █  ████ █████",
+/// Wordmark shown at the top of a run and of --help, with a cyan-to-indigo
+/// vertical gradient (one color per row). Raw strings keep the backslashes.
+const BANNER: [&str; 6] = [
+    r"                  _",
+    r"__   ____ _ _ __ | |_ __ _  __ _  ___",
+    r"\ \ / / _` | '_ \| __/ _` |/ _` |/ _ \",
+    r" \ V / (_| | | | | || (_| | (_| |  __/",
+    r"  \_/ \__,_|_| |_|\__\__,_|\__, |\___|",
+    r"                           |___/",
 ];
-const BANNER_RGB: [(u8, u8, u8); 5] = [
-    (45, 212, 191),
-    (34, 211, 238),
-    (96, 165, 250),
-    (167, 139, 250),
-    (232, 121, 249),
+const BANNER_RGB: [(u8, u8, u8); 6] = [
+    (103, 232, 249),
+    (56, 189, 248),
+    (56, 169, 240),
+    (79, 139, 245),
+    (99, 102, 241),
+    (99, 102, 241),
 ];
+const SUBTITLE: &str = "  Web security scanner";
 
-/// The gradient banner as a single multi-line string (used for both the live
+/// The gradient wordmark plus subtitle as one string (used for both the live
 /// scan output and the top of --help).
 fn banner() -> String {
-    BANNER
+    let mut s: String = BANNER
         .iter()
         .zip(BANNER_RGB.iter())
         .map(|(line, &(r, g, b))| style::rgb(r, g, b, line))
         .collect::<Vec<_>>()
-        .join("\n")
+        .join("\n");
+    s.push('\n');
+    s.push_str(&style::dim(SUBTITLE));
+    s
 }
 
 fn print_banner() {
