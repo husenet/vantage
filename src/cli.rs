@@ -261,15 +261,12 @@ pub fn run() -> i32 {
     let mut rate = net::RateLimiter::new(args.rate);
     let multi = targets.len() > 1;
 
-    if !args.json {
-        println!("{}", style::dim("vantage - web security scanner"));
-        if authenticated {
-            println!(
-                "{} {}",
-                style::bold("Authenticated:"),
-                style::dim(&auth_summary(&args))
-            );
-        }
+    if !args.json && authenticated {
+        println!(
+            "{} {}",
+            style::bold("Authenticated:"),
+            style::dim(&auth_summary(&args))
+        );
     }
 
     let mut results: Vec<TargetResult> = Vec::new();
@@ -286,6 +283,7 @@ pub fn run() -> i32 {
                     style::red("  warning: sending credentials over plaintext http://")
                 );
             }
+            print_banner();
         }
 
         let result = scan_one(&url, &plan, &cfg, &mut rate, authenticated, args.json);
@@ -313,6 +311,30 @@ pub fn run() -> i32 {
     } else {
         0
     }
+}
+
+/// Block-letter "VANTAGE", printed below the target with a teal-to-magenta
+/// vertical gradient (one color per row).
+const BANNER: [&str; 5] = [
+    "█   █  ███  █   █ █████  ███   ████ █████",
+    "█   █ █   █ ██  █   █   █   █ █     █    ",
+    "█   █ █████ █ █ █   █   █████ █ ███ ████ ",
+    " █ █  █   █ █  ██   █   █   █ █   █ █    ",
+    "  █   █   █ █   █   █   █   █  ████ █████",
+];
+const BANNER_RGB: [(u8, u8, u8); 5] = [
+    (45, 212, 191),
+    (34, 211, 238),
+    (96, 165, 250),
+    (167, 139, 250),
+    (232, 121, 249),
+];
+
+fn print_banner() {
+    for (line, &(r, g, b)) in BANNER.iter().zip(BANNER_RGB.iter()) {
+        println!("{}", style::rgb(r, g, b, line));
+    }
+    println!();
 }
 
 /// Pull the cookie names out of the --cookie values (each may hold several

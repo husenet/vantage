@@ -7,8 +7,13 @@ is grouped into separated, severity-free sections, ready to drop into a report.
 
 
 $ vantage example.com --all
-vantage - web security scanner
 Target: https://example.com
+█   █  ███  █   █ █████  ███   ████ █████
+█   █ █   █ ██  █   █   █   █ █     █
+█   █ █████ █ █ █   █   █████ █ ███ ████
+ █ █  █   █ █  ██   █   █   █ █   █ █
+  █   █   █ █   █   █   █   █  ████ █████
+
 HTTP 200
 
 == DNS records (example.com) ===================================

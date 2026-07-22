@@ -34,3 +34,12 @@ pub fn magenta(t: &str) -> String {
 pub fn cyan(t: &str) -> String {
     w("36", t)
 }
+
+/// 24-bit foreground color, for the startup banner gradient.
+pub fn rgb(r: u8, g: u8, b: u8, t: &str) -> String {
+    if COLOR.load(Ordering::Relaxed) {
+        format!("\x1b[38;2;{r};{g};{b}m{t}\x1b[0m")
+    } else {
+        t.to_string()
+    }
+}

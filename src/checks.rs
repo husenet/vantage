@@ -85,7 +85,7 @@ pub fn cookies(f: &Fetched, auth_cookies: &[String]) -> Section {
     for a in auth_cookies {
         if !seen.iter().any(|n| n.eq_ignore_ascii_case(a)) {
             sec.bad(&format!(
-                "{a} (auth cookie) not re-issued here; can't confirm Secure/HttpOnly/SameSite - check the login response"
+                "{a} (auth cookie) not re-issued; flags not visible on this response"
             ));
         }
     }
@@ -112,7 +112,7 @@ pub fn cors(f: &Fetched) -> Section {
             .map(|v| v.to_lowercase() == "true")
             .unwrap_or(false);
         if creds {
-            sec.bad("wildcard origin (*) with credentials enabled - sensitive data exposure");
+            sec.bad("wildcard origin (*) with credentials");
         } else {
             sec.bad("wildcard origin (*)");
         }
@@ -149,7 +149,7 @@ pub fn csp(f: &Fetched) -> Section {
     let policy = match f.get("content-security-policy") {
         None => {
             if f.get("content-security-policy-report-only").is_some() {
-                sec.bad("only Content-Security-Policy-Report-Only set (reports, does not enforce)");
+                sec.bad("only Content-Security-Policy-Report-Only set");
             } else {
                 sec.bad("no Content-Security-Policy header");
             }
@@ -178,12 +178,10 @@ pub fn csp(f: &Fetched) -> Section {
         }
         for v in vals {
             match v.as_str() {
-                "'unsafe-inline'" => sec.bad(&format!(
-                    "{name} allows 'unsafe-inline' (defeats much of CSP's XSS protection)"
-                )),
+                "'unsafe-inline'" => sec.bad(&format!("{name} allows 'unsafe-inline'")),
                 "'unsafe-eval'" => sec.bad(&format!("{name} allows 'unsafe-eval'")),
                 "*" => sec.bad(&format!("{name} uses wildcard *")),
-                "http:" => sec.bad(&format!("{name} allows insecure http: sources")),
+                "http:" => sec.bad(&format!("{name} allows http: sources")),
                 _ => {}
             }
         }
@@ -217,10 +215,7 @@ pub fn hsts(f: &Fetched) -> Section {
     match max_age {
         None => sec.bad("no valid max-age"),
         Some(0) => sec.bad("max-age=0 disables HSTS"),
-        Some(ma) if ma < 15_768_000 => sec.bad(&format!(
-            "max-age={ma} (~{}d) is short; >= 6 months recommended",
-            ma / 86400
-        )),
+        Some(ma) if ma < 15_768_000 => sec.bad(&format!("max-age={ma} (~{}d), short", ma / 86400)),
         Some(ma) => sec.good(&format!("max-age={ma} (~{}d)", ma / 86400)),
     }
     if inc {
@@ -250,13 +245,13 @@ pub fn caching(f: &Fetched, authenticated: bool) -> Section {
     if authenticated {
         let low = cc.as_deref().unwrap_or("").to_lowercase();
         if cc.is_none() {
-            sec.bad("no Cache-Control on an authenticated response (may be stored by shared caches)");
+            sec.bad("no Cache-Control on an authenticated response");
         } else if low.contains("public") {
             sec.bad("authenticated response marked Cache-Control: public");
         } else if !(low.contains("no-store") || low.contains("private")) {
             sec.bad("authenticated response is cacheable (no no-store / private)");
         } else {
-            sec.good("not cacheable by shared caches (no-store / private set)");
+            sec.good("not cacheable (no-store / private set)");
         }
     } else if cc.is_none() {
         sec.note("no Cache-Control header");
@@ -312,11 +307,9 @@ pub fn auth_effect(
             anon.status, authed.status
         ));
     } else if authed.status == anon.status && similar {
-        sec.bad(
-            "same response with and without credentials - auth may not be enforced (or creds ignored)",
-        );
+        sec.bad("same response with and without credentials");
     } else {
-        sec.note("responses differ; review whether the endpoint enforces authentication");
+        sec.note("responses differ between authenticated and anonymous requests");
     }
     sec
 }
@@ -352,10 +345,7 @@ pub fn methods(url: &str, active: bool, cfg: &net::HttpConfig, rate: &mut RateLi
         };
         sec.text(format!("  {}  {}  {}", mark, code, s::bold(m)));
         if m == "TRACE" && allowed {
-            sec.bad("TRACE accepted (Cross-Site Tracing / XST risk)");
-        }
-        if matches!(m, "POST" | "PUT" | "DELETE" | "PATCH") && allowed {
-            sec.bad(&format!("{m} accepted (confirm it is intended and authorized)"));
+            sec.bad("TRACE enabled (XST risk)");
         }
     }
     if !active {
@@ -526,9 +516,7 @@ pub fn nmap(host: &str, vulners: bool, ports: Option<&str>) -> Section {
     if vulners {
         let cves = stdout.lines().filter(|x| x.contains("CVE-")).count();
         if cves > 0 {
-            sec.bad(&format!(
-                "{cves} CVE line(s) reported by vulners - review the output"
-            ));
+            sec.bad(&format!("{cves} CVE line(s) reported by vulners"));
         } else {
             sec.good("no CVEs reported for the detected service versions");
         }
