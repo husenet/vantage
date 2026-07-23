@@ -28,7 +28,8 @@ pub fn headers(f: &Fetched) -> Section {
     items.sort_by(|a, b| a.0.cmp(&b.0));
     sec.text(s::dim(&format!("  {} response headers", items.len())));
     for (k, v) in &items {
-        let vv = if v.chars().count() <= 100 {
+        // Cookies are shown in full; other long values are trimmed for readability.
+        let vv = if k == "set-cookie" || v.chars().count() <= 100 {
             v.clone()
         } else {
             let head: String = v.chars().take(100).collect();
@@ -68,6 +69,8 @@ pub fn cookies(f: &Fetched, auth_cookies: &[String]) -> Section {
         if !low.contains("samesite") {
             missing.push("SameSite");
         }
+        // Show the full Set-Cookie line, then the flag verdict for it.
+        sec.text(format!("  {}", s::dim(c)));
         let label = if is_auth {
             format!("{name} (auth cookie)")
         } else {
