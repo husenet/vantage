@@ -94,7 +94,7 @@ pub fn cookies(f: &Fetched, auth_cookies: &[String]) -> Section {
     }
 
     if cks.is_empty() && auth_cookies.is_empty() {
-        sec.note("no Set-Cookie headers");
+        sec.good("no Set-Cookie headers");
     }
     sec
 }
@@ -103,7 +103,7 @@ pub fn cors(f: &Fetched) -> Section {
     let mut sec = Section::new("CORS");
     let acao = match f.get("access-control-allow-origin") {
         None => {
-            sec.note("no Access-Control-Allow-Origin header");
+            sec.good("no Access-Control-Allow-Origin header");
             return sec;
         }
         Some(v) => v,
@@ -138,7 +138,7 @@ pub fn disclosure(f: &Fetched) -> Section {
     ] {
         if let Some(v) = f.get(name) {
             any = true;
-            sec.text(format!("  {}: {}", s::magenta(name), s::dim(&v)));
+            sec.bad(&format!("{}: {}", s::magenta(name), s::dim(&v)));
         }
     }
     if !any {
@@ -228,8 +228,6 @@ pub fn hsts(f: &Fetched) -> Section {
     }
     if pre {
         sec.good("preload set");
-    } else {
-        sec.note("preload not set");
     }
     sec
 }
@@ -256,8 +254,6 @@ pub fn caching(f: &Fetched, authenticated: bool) -> Section {
         } else {
             sec.good("not cacheable (no-store / private set)");
         }
-    } else if cc.is_none() {
-        sec.note("no Cache-Control header");
     }
     sec
 }
