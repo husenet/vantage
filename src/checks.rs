@@ -13,9 +13,9 @@ const SECURITY_HEADERS: &[(&str, &str)] = &[
     ("x-content-type-options", "MIME-sniffing protection"),
     ("referrer-policy", "controls referrer leakage"),
     ("permissions-policy", "restricts powerful browser features"),
-    ("cross-origin-opener-policy", "COOP"),
-    ("cross-origin-embedder-policy", "COEP"),
-    ("cross-origin-resource-policy", "CORP"),
+    ("cross-origin-opener-policy", "COOP - isolates the browsing context"),
+    ("cross-origin-embedder-policy", "COEP - requires cross-origin resources to opt in"),
+    ("cross-origin-resource-policy", "CORP - limits which sites can load the resource"),
 ];
 
 pub fn headers(f: &Fetched) -> Section {
@@ -43,7 +43,7 @@ pub fn headers(f: &Fetched) -> Section {
         if f.get(name).is_some() {
             sec.good(name);
         } else {
-            sec.bad(&format!("{name}  ({desc})"));
+            sec.bad(&format!("{name} ({desc})"));
         }
     }
     sec
@@ -87,7 +87,7 @@ pub fn cookies(f: &Fetched, auth_cookies: &[String]) -> Section {
     // by the server on Set-Cookie, so a plain request cookie carries none to check.
     for a in auth_cookies {
         if !seen.iter().any(|n| n.eq_ignore_ascii_case(a)) {
-            sec.bad(&format!(
+            sec.note(&format!(
                 "{a} (auth cookie) not re-issued; flags not visible on this response"
             ));
         }
@@ -103,7 +103,7 @@ pub fn cors(f: &Fetched) -> Section {
     let mut sec = Section::new("CORS");
     let acao = match f.get("access-control-allow-origin") {
         None => {
-            sec.good("no Access-Control-Allow-Origin header");
+            sec.good("no cross-origin sharing (same-origin only)");
             return sec;
         }
         Some(v) => v,
@@ -183,7 +183,7 @@ pub fn csp(f: &Fetched) -> Section {
             match v.as_str() {
                 "'unsafe-inline'" => sec.bad(&format!("{name} allows 'unsafe-inline'")),
                 "'unsafe-eval'" => sec.bad(&format!("{name} allows 'unsafe-eval'")),
-                "*" => sec.bad(&format!("{name} uses wildcard *")),
+                "*" => sec.bad(&format!("{name} allows wildcard *")),
                 "http:" => sec.bad(&format!("{name} allows http: sources")),
                 _ => {}
             }
@@ -218,7 +218,9 @@ pub fn hsts(f: &Fetched) -> Section {
     match max_age {
         None => sec.bad("no valid max-age"),
         Some(0) => sec.bad("max-age=0 disables HSTS"),
-        Some(ma) if ma < 15_768_000 => sec.bad(&format!("max-age={ma} (~{}d), short", ma / 86400)),
+        Some(ma) if ma < 15_768_000 => {
+            sec.bad(&format!("max-age too short: {ma} (~{}d)", ma / 86400))
+        }
         Some(ma) => sec.good(&format!("max-age={ma} (~{}d)", ma / 86400)),
     }
     if inc {
@@ -308,7 +310,7 @@ pub fn auth_effect(
     } else if authed.status == anon.status && similar {
         sec.bad("same response with and without credentials");
     } else {
-        sec.note("responses differ between authenticated and anonymous requests");
+        sec.note("inconclusive: authenticated and unauthenticated responses differ");
     }
     sec
 }
@@ -365,7 +367,7 @@ pub fn dnsrecon(host: &str) -> Section {
             Ok(o) => o,
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
                 drop(spin);
-                sec.bad("nslookup not found on PATH (e.g. sudo apt install dnsutils)");
+                sec.note("nslookup not found on PATH (e.g. sudo apt install dnsutils)");
                 return sec;
             }
             Err(e) => {
@@ -450,11 +452,11 @@ pub fn nmap(host: &str, vulners: bool, ports: Option<&str>) -> Section {
     let out = match result {
         Ok(o) => o,
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
-            sec.bad("nmap not installed / not on PATH (e.g. sudo apt install nmap)");
+            sec.note("nmap not installed / not on PATH (e.g. sudo apt install nmap)");
             return sec;
         }
         Err(e) => {
-            sec.bad(&format!("nmap failed to launch: {e}"));
+            sec.note(&format!("nmap failed to launch: {e}"));
             return sec;
         }
     };
@@ -486,7 +488,7 @@ pub fn nmap(host: &str, vulners: bool, ports: Option<&str>) -> Section {
                 .code()
                 .map(|c| c.to_string())
                 .unwrap_or_else(|| "signal".into());
-            sec.bad(&format!("nmap exited with status {code}"));
+            sec.note(&format!("nmap exited with status {code}"));
         } else {
             sec.bad("nmap returned no scan results");
         }

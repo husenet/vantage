@@ -55,7 +55,7 @@ pub fn build_headers(
     if !cookies.is_empty() {
         let joined = cookies
             .iter()
-            .map(|c| c.trim())
+            .map(|c| strip_cookie_prefix(c))
             .collect::<Vec<_>>()
             .join("; ");
         map.insert(
@@ -106,6 +106,28 @@ fn base64_encode(input: &[u8]) -> String {
         });
     }
     out
+}
+
+/// A pasted cookie string often includes the leading "Cookie:" header name
+/// (e.g. copied from devtools). Drop it so the value is just the pairs.
+pub fn strip_cookie_prefix(s: &str) -> &str {
+    let t = s.trim();
+    match t.get(..7) {
+        Some(p) if p.eq_ignore_ascii_case("cookie:") => t[7..].trim(),
+        _ => t,
+    }
+}
+
+/// True when a positional argument cannot be a host/URL and is almost certainly
+/// a mis-pasted cookie or header (contains whitespace, or the host part carries
+/// a '='). Used to catch `vantage --cookies "a=b; c=d"` style mistakes.
+pub fn looks_like_pasted_value(target: &str) -> bool {
+    let t = target.trim();
+    if t.is_empty() || t.chars().any(|c| c.is_whitespace()) {
+        return true;
+    }
+    let host = host_of(t);
+    host.is_empty() || host.contains('=')
 }
 
 pub fn normalize_url(target: &str) -> String {

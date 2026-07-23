@@ -42,7 +42,7 @@ struct Args {
     /// Strict-Transport-Security analysis
     #[arg(long)]
     hsts: bool,
-    /// cookie flags (Secure/HttpOnly/SameSite)
+    /// audit Set-Cookie flags (Secure/HttpOnly/SameSite); does not send cookies (see --cookie)
     #[arg(long)]
     cookies: bool,
     /// CORS configuration
@@ -75,7 +75,7 @@ struct Args {
     /// send a custom request header (repeatable): --header "Name: Value"
     #[arg(long = "header", value_name = "H")]
     header: Vec<String>,
-    /// send a cookie (repeatable): --cookie "name=value"
+    /// send cookies with the request, e.g. --cookie "name=value; name2=value2" (repeatable)
     #[arg(long = "cookie", value_name = "C")]
     cookie: Vec<String>,
     /// Authorization: Bearer <token>
@@ -241,14 +241,14 @@ pub fn run() -> i32 {
         || args.basic.is_some();
 
     // Resolve the target list: the positional domains plus any --targets file.
-    let mut targets: Vec<String> = args.domains.clone();
+    let mut raw_targets: Vec<String> = args.domains.clone();
     if let Some(file) = &args.targets {
         match std::fs::read_to_string(file) {
             Ok(txt) => {
                 for line in txt.lines() {
                     let t = line.trim();
                     if !t.is_empty() && !t.starts_with('#') {
-                        targets.push(t.to_string());
+                        raw_targets.push(t.to_string());
                     }
                 }
             }
@@ -256,6 +256,23 @@ pub fn run() -> i32 {
                 eprintln!("{}", style::red(&format!("cannot read --targets {file}: {e}")));
                 return 2;
             }
+        }
+    }
+    // Drop anything that is clearly a mis-pasted cookie/header, not a domain
+    // (a common mistake is using --cookies, the audit toggle, to send a cookie).
+    let mut targets: Vec<String> = Vec::new();
+    for t in raw_targets {
+        if net::looks_like_pasted_value(&t) {
+            let shown: String = t.chars().take(40).collect();
+            let ell = if t.chars().count() > 40 { "..." } else { "" };
+            eprintln!(
+                "{}",
+                style::red(&format!(
+                    "ignoring '{shown}{ell}': not a valid domain. To send a cookie use --cookie 'name=value'."
+                ))
+            );
+        } else {
+            targets.push(t);
         }
     }
     if targets.is_empty() {
@@ -366,7 +383,7 @@ fn print_banner() {
 fn cookie_names(cookies: &[String]) -> Vec<String> {
     let mut names = Vec::new();
     for c in cookies {
-        for pair in c.split(';') {
+        for pair in net::strip_cookie_prefix(c).split(';') {
             let name = pair.split('=').next().unwrap_or("").trim();
             if !name.is_empty() {
                 names.push(name.to_string());

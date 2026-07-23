@@ -147,11 +147,17 @@ whatever session you give it, so you can hit pages behind a login. Pass a
 session cookie, a bearer/basic token, or arbitrary headers:
 
 ```bash
-vantage app.example.com --cookie "session=abc123" --headers --cookies
+vantage app.example.com --cookie "session=abc123"
+vantage app.example.com --cookie "sid=abc; csrf=xyz; theme=dark"   # paste a whole cookie string
 vantage api.example.com --bearer "$TOKEN" --methods --active
 vantage app.example.com --header "X-Api-Key: k" --header "X-Env: staging"
 vantage app.example.com --basic "admin:s3cret"
 ```
+
+Note the singular/plural: **`--cookie`** (singular) *sends* cookies with the
+request; **`--cookies`** (plural) is the check that *audits* the server's
+Set-Cookie flags and takes no value. You can paste a full cookie string into one
+`--cookie`, with or without a leading `Cookie:`; the domain still goes first.
 
 Credentials go on every request. It warns you if you send them over plaintext
 `http://`. The cookie check singles out any cookie you pass with `--cookie`: if
