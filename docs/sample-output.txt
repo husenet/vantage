@@ -91,9 +91,8 @@ HTTP 200
   - no Strict-Transport-Security header
 
 == HTTP methods ================================================
-  Allow: (none returned to OPTIONS)
-  allowed  200  GET
-  allowed  200  HEAD
-  blocked  405  OPTIONS
-  blocked  405  TRACE
+  served      200  GET
+  served      200  HEAD
+  not served  405  OPTIONS
+  not served  405  TRACE
     POST/PUT/DELETE/PATCH not probed; pass --active to include them

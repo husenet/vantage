@@ -326,11 +326,13 @@ pub fn methods(url: &str, active: bool, cfg: &net::HttpConfig, rate: &mut RateLi
         let code = net::request(m, url, cfg, rate)
             .map(|r| r.status().as_u16())
             .unwrap_or(0);
-        let allowed = !matches!(code, 405 | 501 | 0);
-        let mark = if allowed {
-            s::green("allowed")
-        } else {
-            s::dim("blocked")
+        // "served" = the method returned a success/redirect; "auth" = the route
+        // exists but is gated (401/403); everything else (404/405/501/dropped) is
+        // not served. The status code is shown so the raw signal is never hidden.
+        let mark = match code {
+            200..=399 => s::green(&format!("{:<10}", "served")),
+            401 | 403 => s::cyan(&format!("{:<10}", "auth")),
+            _ => s::dim(&format!("{:<10}", "not served")),
         };
         sec.text(format!("  {}  {:>3}  {}", mark, code, s::bold(m)));
     }
