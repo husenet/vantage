@@ -164,6 +164,21 @@ Credentials go on every request. It warns you if you send them over plaintext
 the server re-issues it, its Secure/HttpOnly/SameSite flags are graded; if not,
 it says so, since those flags only show up on the server's `Set-Cookie`.
 
+## Releasing
+
+`scripts/release.sh` runs the pre-release checks, builds, and writes the zip:
+
+```bash
+cargo install cargo-audit --locked    # once
+./scripts/release.sh
+```
+
+It stops the release on a dirty working tree, a failing test, or any RustSec
+advisory against the dependency tree (`cargo audit --deny warnings`, which also
+covers unmaintained, unsound, and yanked crates). rustfmt and clippy are
+reported but do not block. Audit runs every time rather than once, since new
+advisories land against code that has not changed.
+
 ## License
 
 [MIT](LICENSE) (c) husenet
