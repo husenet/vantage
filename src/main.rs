@@ -7,6 +7,7 @@ mod report;
 mod section;
 mod spin;
 mod style;
+mod term;
 
 fn main() {
     // Restore the terminal cursor (which the spinner may hide) on Ctrl-C.

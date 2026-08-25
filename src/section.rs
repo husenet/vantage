@@ -2,8 +2,7 @@
 //! separated, severity-free output suited to report screenshots.
 
 use crate::style as s;
-
-const WIDTH: usize = 64;
+use crate::term;
 
 pub struct Section {
     pub title: String,
@@ -37,11 +36,14 @@ impl Section {
 }
 
 pub fn print_section(sec: &Section) {
+    let width = term::width();
     let head = format!("== {} ", sec.title);
-    let pad = "=".repeat(WIDTH.saturating_sub(head.chars().count()));
+    let pad = "=".repeat(width.saturating_sub(term::display_width(&head)));
     println!();
     println!("{}", s::bold(&format!("{head}{pad}")));
     for line in &sec.lines {
-        println!("{line}");
+        for out in term::wrap(line, width) {
+            println!("{out}");
+        }
     }
 }

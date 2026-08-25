@@ -25,6 +25,44 @@ const PRELOAD_MIN_AGE: i64 = 31_536_000;
 /// Origin sent to see whether the server reflects arbitrary origins in CORS.
 const PROBE_ORIGIN: &str = "https://vantage-cors-probe.example";
 
+/// Cookie names that carry a session, login, or anti-CSRF value, where losing
+/// same-site protection actually matters.
+fn is_session_cookie(name: &str) -> bool {
+    let n = name.to_lowercase();
+    [
+        "sess",
+        "sid",
+        "auth",
+        "token",
+        "jwt",
+        "login",
+        "remember",
+        "csrf",
+        "xsrf",
+        "antiforgery",
+        "aspnetcore.cookies",
+        "applicationcookie",
+    ]
+    .iter()
+    .any(|k| n.contains(k))
+}
+
+/// Cookie names that name the stack that issued them.
+const FRAMEWORK_COOKIES: &[(&str, &str)] = &[
+    ("asp.net_sessionid", "ASP.NET"),
+    (".aspnetcore.", "ASP.NET Core"),
+    (".aspnet.", "ASP.NET"),
+    (".mvc.", "ASP.NET Core MVC"),
+    ("arraffinity", "Azure App Service"),
+    ("phpsessid", "PHP"),
+    ("jsessionid", "Java"),
+    ("laravel_session", "Laravel"),
+    ("ci_session", "CodeIgniter"),
+    ("connect.sid", "Express"),
+    ("_rails_session", "Rails"),
+    ("django", "Django"),
+];
+
 struct Hsts {
     max_age: Option<i64>,
     include_subdomains: bool,
@@ -193,6 +231,13 @@ pub fn cookies(f: &Fetched, auth_cookies: &[String]) -> Section {
     let cks = f.get_all("set-cookie");
     let mut seen: Vec<String> = Vec::new();
 
+    // Names of every cookie in this response, so a cookie can be judged against
+    // its companions (see the SameSite pair below).
+    let names: Vec<&str> = cks
+        .iter()
+        .map(|c| c.split('=').next().unwrap_or("").trim())
+        .collect();
+
     for c in &cks {
         let name = c.split('=').next().unwrap_or("").trim();
         seen.push(name.to_string());
@@ -224,7 +269,13 @@ pub fn cookies(f: &Fetched, auth_cookies: &[String]) -> Section {
         if !has("httponly") {
             missing.push("HttpOnly");
         }
-        if same_site.is_none() {
+        // A cookie with no SameSite that ships alongside a "<name>SameSite"
+        // companion is the deliberate legacy half of a pair (Azure App Service
+        // emits ARRAffinity + ARRAffinitySameSite this way), so the modern
+        // companion already covers current browsers.
+        let companion = format!("{name}SameSite");
+        let paired = names.iter().any(|o| o.eq_ignore_ascii_case(&companion));
+        if same_site.is_none() && !paired {
             missing.push("SameSite");
         }
 
@@ -246,15 +297,19 @@ pub fn cookies(f: &Fetched, auth_cookies: &[String]) -> Section {
             sec.bad(&format!(
                 "{label} - Secure ineffective (response served over http)"
             ));
-        } else if none_ss {
+        } else if none_ss && (is_auth || is_session_cookie(name)) {
+            // SameSite=None is a deliberate, valid choice for a cookie that has
+            // to travel cross-site, so it is only a weakness on a session or
+            // auth cookie, where it removes the CSRF protection.
             sec.bad(&format!(
-                "{label} - SameSite=None ineffective (sent on all cross-site requests)"
+                "{label} - SameSite=None on a session cookie (sent on cross-site requests)"
             ));
         } else {
-            sec.good(&format!(
-                "{label} - Secure, HttpOnly, SameSite={} set",
-                same_site.unwrap_or("")
-            ));
+            let ss = match same_site {
+                Some(v) => format!("SameSite={v}"),
+                None => "SameSite via companion cookie".to_string(),
+            };
+            sec.good(&format!("{label} - Secure, HttpOnly, {ss} set"));
         }
     }
 
@@ -341,6 +396,50 @@ pub fn disclosure(f: &Fetched) -> Section {
             sec.bad(&format!("{}: {}", s::magenta(name), s::dim(&v)));
         }
     }
+
+    // Cookies leak too: a Domain attribute can name the backend origin behind a
+    // proxy or custom domain, and the cookie name often names the stack. Collect
+    // the distinct facts rather than repeating one per cookie.
+    let host = net::host_of(&f.url);
+    let mut backends: Vec<String> = Vec::new();
+    let mut stacks: Vec<&str> = Vec::new();
+    for c in f.get_all("set-cookie") {
+        let name = c.split('=').next().unwrap_or("").trim().to_lowercase();
+        let attrs: Vec<&str> = c.split(';').skip(1).map(str::trim).collect();
+        if let Some(domain) = attrs.iter().find_map(|a| {
+            let (k, v) = a.split_once('=')?;
+            if k.trim().eq_ignore_ascii_case("domain") {
+                Some(v.trim().trim_start_matches('.'))
+            } else {
+                None
+            }
+        }) {
+            // Only a domain outside the scanned host is a leak; a parent of the
+            // host (example.com for app.example.com) is ordinary scoping.
+            let same = host.eq_ignore_ascii_case(domain)
+                || host
+                    .to_lowercase()
+                    .ends_with(&format!(".{}", domain.to_lowercase()));
+            if !same && !backends.iter().any(|h| h.eq_ignore_ascii_case(domain)) {
+                backends.push(domain.to_string());
+            }
+        }
+        if let Some((_, stack)) = FRAMEWORK_COOKIES.iter().find(|(k, _)| name.contains(k)) {
+            if !stacks.contains(stack) {
+                stacks.push(stack);
+            }
+        }
+    }
+    for b in &backends {
+        any = true;
+        sec.bad(&format!("backend host in cookie Domain: {}", s::dim(b)));
+    }
+    if !stacks.is_empty() {
+        any = true;
+        stacks.sort_unstable();
+        sec.bad(&format!("cookie names reveal {}", stacks.join(", ")));
+    }
+
     if !any {
         sec.good("no server/framework headers disclosed");
     }

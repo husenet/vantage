@@ -302,7 +302,7 @@ pub fn run() -> i32 {
         let url = net::normalize_url(target);
         if !args.json {
             if multi {
-                println!("\n{}", style::bold(&"#".repeat(64)));
+                println!("\n{}", style::bold(&"#".repeat(crate::term::width())));
             }
             println!("{} {}", style::bold("Target:"), url);
             if authenticated && url.starts_with("http://") {
