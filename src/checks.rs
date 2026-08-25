@@ -18,6 +18,11 @@ const SECURITY_HEADERS: &[(&str, &str)] = &[
     ("cross-origin-resource-policy", "CORP - limits which sites can load the resource"),
 ];
 
+/// Shortest HSTS max-age generally considered adequate (6 months).
+const HSTS_MIN_AGE: i64 = 15_768_000;
+/// Shortest max-age the HSTS preload list accepts (1 year).
+const PRELOAD_MIN_AGE: i64 = 31_536_000;
+
 pub fn headers(f: &Fetched) -> Section {
     let mut sec = Section::new("HTTP headers");
     let mut items: Vec<(String, String)> = f
@@ -218,7 +223,7 @@ pub fn hsts(f: &Fetched) -> Section {
     match max_age {
         None => sec.bad("no valid max-age"),
         Some(0) => sec.bad("max-age=0 disables HSTS"),
-        Some(ma) if ma < 15_768_000 => {
+        Some(ma) if ma < HSTS_MIN_AGE => {
             sec.bad(&format!("max-age too short: {ma} (~{}d)", ma / 86400))
         }
         Some(ma) => sec.good(&format!("max-age={ma} (~{}d)", ma / 86400)),
@@ -228,8 +233,24 @@ pub fn hsts(f: &Fetched) -> Section {
     } else {
         sec.bad("includeSubDomains not set");
     }
+    // The preload list requires max-age >= 1 year plus includeSubDomains, so the
+    // token alone is inert if either is missing.
     if pre {
-        sec.good("preload set");
+        let mut unmet = Vec::new();
+        if max_age.map_or(true, |ma| ma < PRELOAD_MIN_AGE) {
+            unmet.push("max-age under 1y");
+        }
+        if !inc {
+            unmet.push("no includeSubDomains");
+        }
+        if unmet.is_empty() {
+            sec.good("preload set");
+        } else {
+            sec.bad(&format!(
+                "preload set but not eligible for the preload list ({})",
+                unmet.join(", ")
+            ));
+        }
     }
     sec
 }
