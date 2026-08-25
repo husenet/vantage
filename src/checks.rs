@@ -22,6 +22,138 @@ const SECURITY_HEADERS: &[(&str, &str)] = &[
 const HSTS_MIN_AGE: i64 = 15_768_000;
 /// Shortest max-age the HSTS preload list accepts (1 year).
 const PRELOAD_MIN_AGE: i64 = 31_536_000;
+/// Origin sent to see whether the server reflects arbitrary origins in CORS.
+const PROBE_ORIGIN: &str = "https://vantage-cors-probe.example";
+
+struct Hsts {
+    max_age: Option<i64>,
+    include_subdomains: bool,
+    preload: bool,
+    repeated_max_age: bool,
+}
+
+fn parse_hsts(v: &str) -> Hsts {
+    let mut h = Hsts {
+        max_age: None,
+        include_subdomains: false,
+        preload: false,
+        repeated_max_age: false,
+    };
+    let mut seen = false;
+    for part in v.split(';') {
+        let p = part.trim().to_lowercase();
+        if let Some(rest) = p.strip_prefix("max-age=") {
+            if seen {
+                h.repeated_max_age = true;
+            }
+            seen = true;
+            h.max_age = rest.trim().trim_matches('"').parse::<i64>().ok();
+        } else if p == "includesubdomains" {
+            h.include_subdomains = true;
+        } else if p == "preload" {
+            h.preload = true;
+        }
+    }
+    h
+}
+
+/// True when the CSP names frame-ancestors, which makes browsers ignore
+/// X-Frame-Options entirely.
+fn csp_has_frame_ancestors(f: &Fetched) -> bool {
+    f.get("content-security-policy")
+        .map(|p| {
+            p.split(';')
+                .any(|d| d.trim().split_whitespace().next().unwrap_or("") == "frame-ancestors")
+        })
+        .unwrap_or(false)
+}
+
+/// Judge whether a security header actually does anything. Returns Some(reason)
+/// when the header is present but its value leaves the protection off.
+fn header_ineffective(name: &str, value: &str, f: &Fetched) -> Option<String> {
+    let v = value.trim();
+    let low = v.to_lowercase();
+    if v.is_empty() {
+        return Some("empty value".into());
+    }
+    // A single token, ignoring any report-to/report-uri style parameters.
+    let token = low.split(';').next().unwrap_or("").trim();
+    match name {
+        "strict-transport-security" => {
+            if !f.is_https {
+                return Some("served over http".into());
+            }
+            let h = parse_hsts(v);
+            if h.repeated_max_age {
+                return Some("repeated max-age".into());
+            }
+            match h.max_age {
+                None => Some("no valid max-age".into()),
+                Some(0) => Some("max-age=0".into()),
+                _ => None,
+            }
+        }
+        // Only DENY and SAMEORIGIN are honored; ALLOW-FROM was never implemented.
+        "x-frame-options" => {
+            if csp_has_frame_ancestors(f) {
+                Some("overridden by CSP frame-ancestors".into())
+            } else if low == "deny" || low == "sameorigin" {
+                None
+            } else {
+                Some(format!("{v} is not honored"))
+            }
+        }
+        "x-content-type-options" => {
+            if low == "nosniff" {
+                None
+            } else {
+                Some(format!("{v} is not nosniff"))
+            }
+        }
+        "referrer-policy" => {
+            if low.split(',').any(|t| t.trim() == "unsafe-url") {
+                Some("unsafe-url sends the full URL".into())
+            } else {
+                None
+            }
+        }
+        "cross-origin-opener-policy" | "cross-origin-embedder-policy" => {
+            if token == "unsafe-none" {
+                Some("unsafe-none is the default".into())
+            } else {
+                None
+            }
+        }
+        "cross-origin-resource-policy" => {
+            if low == "cross-origin" {
+                Some("cross-origin allows any site".into())
+            } else {
+                None
+            }
+        }
+        "permissions-policy" => {
+            // An allowlist of * grants the feature to every embedded frame, so a
+            // policy whose entries are all * is looser than sending no header.
+            let mut any = false;
+            let all_star = low
+                .split(',')
+                .filter(|d| !d.trim().is_empty())
+                .all(|d| {
+                    any = true;
+                    d.split('=')
+                        .nth(1)
+                        .map(|a| a.trim().trim_matches('"') == "*")
+                        .unwrap_or(false)
+                });
+            if any && all_star {
+                Some("every feature allowlisted to *".into())
+            } else {
+                None
+            }
+        }
+        _ => None,
+    }
+}
 
 pub fn headers(f: &Fetched) -> Section {
     let mut sec = Section::new("HTTP headers");
@@ -45,10 +177,12 @@ pub fn headers(f: &Fetched) -> Section {
     sec.text("");
     sec.text(s::bold("  security headers"));
     for (name, desc) in SECURITY_HEADERS {
-        if f.get(name).is_some() {
-            sec.good(name);
-        } else {
-            sec.bad(&format!("{name} ({desc})"));
+        match f.get(name) {
+            None => sec.bad(&format!("{name} ({desc})")),
+            Some(v) => match header_ineffective(name, &v, f) {
+                None => sec.good(name),
+                Some(why) => sec.bad(&format!("{name} ineffective ({why})")),
+            },
         }
     }
     sec
@@ -63,17 +197,37 @@ pub fn cookies(f: &Fetched, auth_cookies: &[String]) -> Section {
         let name = c.split('=').next().unwrap_or("").trim();
         seen.push(name.to_string());
         let is_auth = auth_cookies.iter().any(|a| a.eq_ignore_ascii_case(name));
-        let low = c.to_lowercase();
+        // Attributes are only the ';'-separated pairs after the cookie value, so
+        // parse them rather than substring-matching the whole line: a value or a
+        // Domain like "secure.example.com" must not count as the Secure flag.
+        let attrs: Vec<&str> = c.split(';').skip(1).map(str::trim).collect();
+        let has = |n: &str| {
+            attrs.iter().any(|a| {
+                a.split('=').next().unwrap_or("").trim().eq_ignore_ascii_case(n)
+            })
+        };
+        let same_site: Option<&str> = attrs.iter().find_map(|a| {
+            let (k, v) = a.split_once('=')?;
+            if k.trim().eq_ignore_ascii_case("samesite") {
+                Some(v.trim())
+            } else {
+                None
+            }
+        });
+        let secure = has("secure");
+        let none_ss = same_site.map(|v| v.eq_ignore_ascii_case("none")).unwrap_or(false);
+
         let mut missing = Vec::new();
-        if f.is_https && !low.contains("secure") {
+        if !secure {
             missing.push("Secure");
         }
-        if !low.contains("httponly") {
+        if !has("httponly") {
             missing.push("HttpOnly");
         }
-        if !low.contains("samesite") {
+        if same_site.is_none() {
             missing.push("SameSite");
         }
+
         // Show the full Set-Cookie line, then the flag verdict for it.
         sec.text(format!("  {}", s::dim(c)));
         let label = if is_auth {
@@ -81,10 +235,26 @@ pub fn cookies(f: &Fetched, auth_cookies: &[String]) -> Section {
         } else {
             name.to_string()
         };
-        if missing.is_empty() {
-            sec.good(&format!("{label} - Secure, HttpOnly, SameSite all set"));
-        } else {
+        if none_ss && !secure {
+            // Browsers refuse to store SameSite=None without Secure.
+            sec.bad(&format!(
+                "{label} - ineffective (SameSite=None without Secure, cookie not stored)"
+            ));
+        } else if !missing.is_empty() {
             sec.bad(&format!("{label} - missing {}", missing.join(", ")));
+        } else if !f.is_https {
+            sec.bad(&format!(
+                "{label} - Secure ineffective (response served over http)"
+            ));
+        } else if none_ss {
+            sec.bad(&format!(
+                "{label} - SameSite=None ineffective (sent on all cross-site requests)"
+            ));
+        } else {
+            sec.good(&format!(
+                "{label} - Secure, HttpOnly, SameSite={} set",
+                same_site.unwrap_or("")
+            ));
         }
     }
 
@@ -104,9 +274,26 @@ pub fn cookies(f: &Fetched, auth_cookies: &[String]) -> Section {
     sec
 }
 
-pub fn cors(f: &Fetched) -> Section {
+pub fn cors(f: &Fetched, cfg: &net::HttpConfig, rate: &mut RateLimiter) -> Section {
     let mut sec = Section::new("CORS");
-    let acao = match f.get("access-control-allow-origin") {
+
+    // Servers that reflect the request Origin send no ACAO when no Origin was
+    // sent, so the first response alone cannot tell "restricted" from
+    // "reflects anything". Ask again with an Origin to find out.
+    let probe = net::fetch(&f.url, &net::with_origin(cfg, PROBE_ORIGIN), rate).ok();
+    let probe_acao = probe.as_ref().and_then(|p| p.get("access-control-allow-origin"));
+    let creds = [
+        f.get("access-control-allow-credentials"),
+        probe.as_ref().and_then(|p| p.get("access-control-allow-credentials")),
+    ]
+    .iter()
+    .flatten()
+    .any(|v| v.trim().eq_ignore_ascii_case("true"));
+
+    let acao = match f
+        .get("access-control-allow-origin")
+        .or_else(|| probe_acao.clone())
+    {
         None => {
             sec.good("no cross-origin sharing (same-origin only)");
             return sec;
@@ -114,16 +301,24 @@ pub fn cors(f: &Fetched) -> Section {
         Some(v) => v,
     };
     sec.text(format!("  access-control-allow-origin: {}", s::dim(&acao)));
-    if acao.trim() == "*" {
-        let creds = f
-            .get("access-control-allow-credentials")
-            .map(|v| v.to_lowercase() == "true")
-            .unwrap_or(false);
+
+    let a = acao.trim();
+    if probe_acao.as_deref().map(str::trim) == Some(PROBE_ORIGIN) {
+        if creds {
+            sec.bad("reflects any origin with credentials");
+        } else {
+            sec.bad("reflects any origin");
+        }
+    } else if a == "*" {
         if creds {
             sec.bad("wildcard origin (*) with credentials");
         } else {
             sec.bad("wildcard origin (*)");
         }
+    } else if a.eq_ignore_ascii_case("null") {
+        sec.bad("origin null ineffective (any sandboxed iframe or data: document sends it)");
+    } else if f.is_https && a.to_lowercase().starts_with("http://") {
+        sec.bad(&format!("allows an http origin ({a})"));
     } else {
         sec.good("origin is restricted");
     }
@@ -181,7 +376,9 @@ pub fn csp(f: &Fetched) -> Section {
         sec.bad("no default-src fallback");
     }
     for (name, vals) in &dirs {
-        if !(name.ends_with("-src") || name == "default-src") {
+        // frame-ancestors does not end in -src but controls framing, and it
+        // overrides X-Frame-Options, so its value matters just as much.
+        if !(name.ends_with("-src") || name == "default-src" || name == "frame-ancestors") {
             continue;
         }
         for v in vals {
@@ -207,49 +404,62 @@ pub fn hsts(f: &Fetched) -> Section {
         Some(v) => v,
     };
     sec.text(format!("  {}", s::dim(&v)));
-    let mut max_age: Option<i64> = None;
-    let mut inc = false;
-    let mut pre = false;
-    for part in v.split(';') {
-        let p = part.trim().to_lowercase();
-        if let Some(rest) = p.strip_prefix("max-age=") {
-            max_age = rest.trim().parse::<i64>().ok();
-        } else if p == "includesubdomains" {
-            inc = true;
-        } else if p == "preload" {
-            pre = true;
-        }
+
+    // Browsers discard the whole header when it does not arrive over https or
+    // when the host is an IP literal, so nothing below it would be applied.
+    if !f.is_https {
+        sec.bad("ineffective (served over http)");
+        return sec;
     }
-    match max_age {
-        None => sec.bad("no valid max-age"),
-        Some(0) => sec.bad("max-age=0 disables HSTS"),
+    if net::host_of(&f.url)
+        .trim_matches(|c| c == '[' || c == ']')
+        .parse::<std::net::IpAddr>()
+        .is_ok()
+    {
+        sec.bad("ineffective (host is an IP address)");
+        return sec;
+    }
+
+    let h = parse_hsts(&v);
+    // A repeated or invalid max-age makes the field non-conforming, and max-age=0
+    // deletes the stored policy, so the other directives never take effect.
+    if h.repeated_max_age {
+        sec.bad("ineffective (repeated max-age)");
+        return sec;
+    }
+    match h.max_age {
+        None => {
+            sec.bad("ineffective (no valid max-age)");
+            return sec;
+        }
+        Some(0) => {
+            sec.bad("ineffective (max-age=0 deletes the policy)");
+            return sec;
+        }
         Some(ma) if ma < HSTS_MIN_AGE => {
             sec.bad(&format!("max-age too short: {ma} (~{}d)", ma / 86400))
         }
         Some(ma) => sec.good(&format!("max-age={ma} (~{}d)", ma / 86400)),
     }
-    if inc {
+    if h.include_subdomains {
         sec.good("includeSubDomains set");
     } else {
         sec.bad("includeSubDomains not set");
     }
     // The preload list requires max-age >= 1 year plus includeSubDomains, so the
     // token alone is inert if either is missing.
-    if pre {
+    if h.preload {
         let mut unmet = Vec::new();
-        if max_age.map_or(true, |ma| ma < PRELOAD_MIN_AGE) {
+        if h.max_age.map_or(true, |ma| ma < PRELOAD_MIN_AGE) {
             unmet.push("max-age under 1y");
         }
-        if !inc {
+        if !h.include_subdomains {
             unmet.push("no includeSubDomains");
         }
         if unmet.is_empty() {
             sec.good("preload set");
         } else {
-            sec.bad(&format!(
-                "preload set but not eligible for the preload list ({})",
-                unmet.join(", ")
-            ));
+            sec.bad(&format!("preload ineffective ({})", unmet.join(", ")));
         }
     }
     sec
@@ -272,10 +482,20 @@ pub fn caching(f: &Fetched, authenticated: bool) -> Section {
             sec.bad("no Cache-Control on an authenticated response");
         } else if low.contains("public") {
             sec.bad("authenticated response marked Cache-Control: public");
-        } else if !(low.contains("no-store") || low.contains("private")) {
-            sec.bad("authenticated response is cacheable (no no-store / private)");
+        } else if low.contains("no-store") {
+            sec.good("no-store set");
+        } else if low.contains("private") {
+            // private only bars shared caches; the browser still stores it.
+            sec.good("private set, not stored by shared caches");
         } else {
-            sec.good("not cacheable (no-store / private set)");
+            sec.bad("authenticated response is cacheable (no no-store / private)");
+        }
+        // A non-zero Age is a shared cache reporting that it stored and replayed
+        // this response, whatever the directives now say.
+        if let Some(age) = f.get("age").and_then(|v| v.trim().parse::<i64>().ok()) {
+            if age > 0 {
+                sec.bad(&format!("served from a shared cache (age {age})"));
+            }
         }
     }
     sec

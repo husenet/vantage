@@ -107,9 +107,9 @@ OpenSSL system dependency to install).
 
 | Flag | What it does |
 |------|--------------|
-| `--headers` | Full response-header dump + security-header matrix (HSTS, CSP, XFO, X-CTO, Referrer-Policy, Permissions-Policy, COOP/COEP/CORP) |
+| `--headers` | Full response-header dump + security-header matrix (HSTS, CSP, XFO, X-CTO, Referrer-Policy, Permissions-Policy, COOP/COEP/CORP). Values are checked, not just presence, so an off-by-default value like `COEP: unsafe-none` reports as ineffective rather than passing |
 | `--cookies` | Cookie flags: Secure, HttpOnly, SameSite |
-| `--cors` | CORS configuration (wildcard origin, wildcard + credentials) |
+| `--cors` | CORS configuration (wildcard, `null`, http origin, credentials); sends one extra request with an `Origin` header to catch servers that reflect any origin |
 | `--disclosure` | Server / framework headers (Server, X-Powered-By, Via, ...) |
 | `--csp` | Parse the CSP and flag `unsafe-inline`/`unsafe-eval`, wildcards, `http:`, missing `default-src` |
 | `--hsts` | Parse + grade HSTS (`max-age`, `includeSubDomains`, `preload`) |

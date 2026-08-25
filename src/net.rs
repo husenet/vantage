@@ -108,6 +108,19 @@ fn base64_encode(input: &[u8]) -> String {
     out
 }
 
+/// Clone the config with an Origin header added, for the CORS reflection probe.
+pub fn with_origin(cfg: &HttpConfig, origin: &str) -> HttpConfig {
+    let mut headers = cfg.headers.clone();
+    if let Ok(v) = HeaderValue::from_str(origin) {
+        headers.insert(reqwest::header::ORIGIN, v);
+    }
+    HttpConfig {
+        timeout: cfg.timeout,
+        insecure: cfg.insecure,
+        headers,
+    }
+}
+
 /// A pasted cookie string often includes the leading "Cookie:" header name
 /// (e.g. copied from devtools). Drop it so the value is just the pairs.
 pub fn strip_cookie_prefix(s: &str) -> &str {

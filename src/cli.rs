@@ -468,7 +468,7 @@ fn scan_one(
                     sections.push(checks::cookies(&f, &plan.auth_cookies));
                 }
                 if plan.cors {
-                    sections.push(checks::cors(&f));
+                    sections.push(checks::cors(&f, cfg, rate));
                 }
                 if plan.disclosure {
                     sections.push(checks::disclosure(&f));
