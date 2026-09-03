@@ -1,12 +1,14 @@
 //! HTTP fetch helpers, URL normalization, and a request-rate limiter.
 
-use reqwest::blocking::{Client, Response};
+use reqwest::blocking::Client;
 use reqwest::header::{HeaderMap, HeaderName, HeaderValue, AUTHORIZATION, COOKIE};
 use reqwest::Method;
+use std::collections::hash_map::DefaultHasher;
+use std::hash::{Hash, Hasher};
 use std::thread;
 use std::time::{Duration, Instant};
 
-pub const USER_AGENT: &str = "vantage/0.6 (+https://github.com/husenet/vantage)";
+pub const USER_AGENT: &str = "vantage/0.9 (+https://github.com/husenet/vantage)";
 
 /// Shared request settings: timeout, TLS strictness, and the default headers
 /// (User-Agent plus any auth the user passed).
@@ -14,6 +16,8 @@ pub struct HttpConfig {
     pub timeout: f64,
     pub insecure: bool,
     pub headers: HeaderMap,
+    /// Force HTTP/1.1 instead of letting ALPN negotiate HTTP/2.
+    pub http1_only: bool,
 }
 
 /// Build the default-header map from the CLI auth inputs. Returns a
@@ -118,6 +122,7 @@ pub fn with_origin(cfg: &HttpConfig, origin: &str) -> HttpConfig {
         timeout: cfg.timeout,
         insecure: cfg.insecure,
         headers,
+        http1_only: cfg.http1_only,
     }
 }
 
@@ -204,6 +209,9 @@ pub struct Fetched {
     /// Length of the decoded response body, used to compare authenticated vs
     /// unauthenticated responses in the auth-effectiveness check.
     pub body_len: usize,
+    /// Negotiated protocol ("HTTP/1.1", "HTTP/2"). Reported because the header
+    /// count depends on it: hop-by-hop headers exist in 1.1 but not 2.
+    pub version: String,
 }
 
 impl Fetched {
@@ -224,31 +232,85 @@ impl Fetched {
     }
 }
 
-fn client(cfg: &HttpConfig) -> reqwest::Result<Client> {
-    Client::builder()
+fn client(cfg: &HttpConfig, follow: bool) -> reqwest::Result<Client> {
+    let mut b = Client::builder()
         .danger_accept_invalid_certs(cfg.insecure)
         .timeout(Duration::from_secs_f64(cfg.timeout))
-        .default_headers(cfg.headers.clone())
-        .build()
+        .default_headers(cfg.headers.clone());
+    if !follow {
+        b = b.redirect(reqwest::redirect::Policy::none());
+    }
+    if cfg.http1_only {
+        b = b.http1_only();
+    }
+    b.build()
 }
 
-/// Send a single request (rate-limited). 4xx/5xx come back as a Response,
-/// not an error; only transport-level failures error out.
-pub fn request(
-    method: &str,
-    url: &str,
-    cfg: &HttpConfig,
-    rate: &mut RateLimiter,
-) -> reqwest::Result<Response> {
+/// Human name for the negotiated protocol, so a header count in a report can be
+/// reproduced (hop-by-hop headers exist in HTTP/1.1 but not HTTP/2).
+pub fn version_str(v: reqwest::Version) -> &'static str {
+    match v {
+        reqwest::Version::HTTP_09 => "HTTP/0.9",
+        reqwest::Version::HTTP_10 => "HTTP/1.0",
+        reqwest::Version::HTTP_11 => "HTTP/1.1",
+        reqwest::Version::HTTP_2 => "HTTP/2",
+        reqwest::Version::HTTP_3 => "HTTP/3",
+        _ => "HTTP",
+    }
+}
+
+fn hash_bytes(b: &[u8]) -> u64 {
+    let mut h = DefaultHasher::new();
+    b.hash(&mut h);
+    h.finish()
+}
+
+/// One method probe: what the server returned at the URL that was asked for.
+pub struct Probe {
+    pub status: u16,
+    /// Location header, when the server answered with a redirect.
+    pub location: Option<String>,
+    /// Hash of the body, so callers can tell responses apart by content and not
+    /// just by status.
+    pub body_hash: u64,
+    pub body_len: usize,
+}
+
+/// Send one request WITHOUT following redirects, so the reported status is the
+/// one returned at the requested URL rather than the status of whatever page the
+/// server pointed at. A transport failure comes back as status 0.
+pub fn probe(method: &str, url: &str, cfg: &HttpConfig, rate: &mut RateLimiter) -> Probe {
     rate.wait();
-    let c = client(cfg)?;
-    let m = Method::from_bytes(method.as_bytes()).unwrap_or(Method::GET);
-    c.request(m, url).send()
+    let send = || -> reqwest::Result<Probe> {
+        let c = client(cfg, false)?;
+        let m = Method::from_bytes(method.as_bytes()).unwrap_or(Method::GET);
+        let resp = c.request(m, url).send()?;
+        let status = resp.status().as_u16();
+        let location = resp
+            .headers()
+            .get(reqwest::header::LOCATION)
+            .and_then(|v| v.to_str().ok())
+            .map(|s| s.to_string());
+        let body = resp.bytes()?;
+        Ok(Probe {
+            status,
+            location,
+            body_hash: hash_bytes(&body),
+            body_len: body.len(),
+        })
+    };
+    send().unwrap_or(Probe {
+        status: 0,
+        location: None,
+        body_hash: 0,
+        body_len: 0,
+    })
 }
 
 /// GET a URL (following redirects). 4xx/5xx are captured, not raised.
 pub fn fetch(url: &str, cfg: &HttpConfig, rate: &mut RateLimiter) -> reqwest::Result<Fetched> {
-    let resp = request("GET", url, cfg, rate)?;
+    rate.wait();
+    let resp = client(cfg, true)?.get(url).send()?;
     let requested = reqwest::Url::parse(url)
         .map(|u| u.to_string())
         .unwrap_or_else(|_| url.to_string());
@@ -258,6 +320,7 @@ pub fn fetch(url: &str, cfg: &HttpConfig, rate: &mut RateLimiter) -> reqwest::Re
     let headers = resp.headers().clone();
     let is_https = final_url.starts_with("https://");
     let redirected = final_url != requested;
+    let version = version_str(resp.version()).to_string();
     let body_len = resp.text().map(|t| t.len()).unwrap_or(0);
     Ok(Fetched {
         status,
@@ -266,5 +329,76 @@ pub fn fetch(url: &str, cfg: &HttpConfig, rate: &mut RateLimiter) -> reqwest::Re
         url: final_url,
         headers,
         body_len,
+        version,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::io::{Read, Write};
+    use std::net::TcpListener;
+
+    fn cfg() -> HttpConfig {
+        HttpConfig {
+            timeout: 5.0,
+            insecure: true,
+            headers: build_headers(None, &[], &[], None, None).unwrap(),
+            http1_only: false,
+        }
+    }
+
+    /// Serve one canned response on a throwaway port and return its URL.
+    fn serve(response: &'static str) -> String {
+        let l = TcpListener::bind("127.0.0.1:0").unwrap();
+        let url = format!("http://{}/", l.local_addr().unwrap());
+        std::thread::spawn(move || {
+            for s in l.incoming().take(4) {
+                let mut s = match s {
+                    Ok(s) => s,
+                    Err(_) => continue,
+                };
+                let mut buf = [0u8; 2048];
+                let _ = s.read(&mut buf);
+                let _ = s.write_all(response.as_bytes());
+                let _ = s.flush();
+            }
+        });
+        url
+    }
+
+    // Issue 1: the probe must report the status returned AT the requested URL.
+    // Following the redirect would report 200 from a different page and hide
+    // that this method is gated.
+    #[test]
+    fn probe_reports_the_redirect_not_its_destination() {
+        let url = serve(
+            "HTTP/1.1 307 Temporary Redirect\r\nLocation: /auth/login\r\nContent-Length: 0\r\n\r\n",
+        );
+        let mut rate = RateLimiter::new(0);
+        let p = probe("GET", &url, &cfg(), &mut rate);
+        assert_eq!(p.status, 307, "must not follow the redirect");
+        assert_eq!(p.location.as_deref(), Some("/auth/login"));
+    }
+
+    // Issue 3: the probe reads the body, so identical responses hash the same
+    // and callers can tell "actioned" from "rendered the same page".
+    #[test]
+    fn probe_hashes_the_body_so_identical_responses_match() {
+        let url = serve("HTTP/1.1 200 OK\r\nContent-Length: 5\r\n\r\nhello");
+        let mut rate = RateLimiter::new(0);
+        let a = probe("GET", &url, &cfg(), &mut rate);
+        let b = probe("DELETE", &url, &cfg(), &mut rate);
+        assert_eq!(a.status, 200);
+        assert_eq!(a.body_len, 5);
+        assert_eq!(a.body_hash, b.body_hash, "same bytes must hash the same");
+    }
+
+    // Issue 4: the negotiated protocol is named, since the header count depends
+    // on it (hop-by-hop headers exist in 1.1 but not 2).
+    #[test]
+    fn version_is_named_for_the_report() {
+        assert_eq!(version_str(reqwest::Version::HTTP_11), "HTTP/1.1");
+        assert_eq!(version_str(reqwest::Version::HTTP_2), "HTTP/2");
+    }
 }

@@ -100,6 +100,9 @@ struct Args {
     /// accept invalid/self-signed TLS certificates
     #[arg(long)]
     insecure: bool,
+    /// force HTTP/1.1 instead of negotiating HTTP/2
+    #[arg(long = "http1")]
+    http1: bool,
     /// emit machine-readable JSON
     #[arg(long)]
     json: bool,
@@ -232,6 +235,7 @@ pub fn run() -> i32 {
         timeout: args.timeout,
         insecure: args.insecure,
         headers,
+        http1_only: args.http1,
     };
 
     let authenticated = args.user_agent.is_some()
@@ -441,7 +445,7 @@ fn scan_one(
             Ok(f) => {
                 status = Some(f.status);
                 if !json {
-                    let mut line = format!("HTTP {}", f.status);
+                    let mut line = format!("{} {}", f.version, f.status);
                     if f.redirected {
                         line += &format!("  (redirected to {})", f.url);
                     }

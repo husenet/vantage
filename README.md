@@ -113,7 +113,7 @@ OpenSSL system dependency to install).
 | `--disclosure` | Server / framework headers (Server, X-Powered-By, Via, ...) |
 | `--csp` | Parse the CSP and flag `unsafe-inline`/`unsafe-eval`, wildcards, `http:`, missing `default-src` |
 | `--hsts` | Parse + grade HSTS (`max-age`, `includeSubDomains`, `preload`) |
-| `--methods` | Allowed HTTP methods (OPTIONS `Allow` + per-method probe); `--active` adds POST/PUT/DELETE/PATCH |
+| `--methods` | Per-method probe; `--active` adds POST/PUT/DELETE/PATCH. Redirects are not followed, so the status is the one returned at the URL you asked for (`redirect 307 GET -> /auth/login`). A `404` reads as `no route`, not `blocked`, since only 401/403/405/501 are a refusal. Response bodies are compared against the GET baseline, so a write method that returns the same page reads as `same as GET` rather than `allowed` |
 | `--dnsrecon` | DNS records (A/AAAA/NS/MX/TXT/SOA/CNAME) via nslookup |
 | `--nmap` | nmap `-sV` service scan (nmap's default ports; see `--ports`/`--all-ports`) |
 | `--vulners` | `nmap -sV --script vulners` (CVE matching) over the same ports |
@@ -137,6 +137,7 @@ With **no module flags**, vantage runs the default HTTP audit:
 | `--active` | With `--methods`, also probe POST/PUT/DELETE/PATCH |
 | `--timeout <s>` | Per-request timeout (default 15) |
 | `--insecure` | Accept invalid/self-signed TLS certificates |
+| `--http1` | Force HTTP/1.1 instead of negotiating HTTP/2. The status line names the protocol, since hop-by-hop headers (`Connection`, `Transfer-Encoding`) exist in 1.1 but not 2, so the header count differs between them |
 | `--json` | Machine-readable JSON |
 | `--no-color` | Disable ANSI colors |
 

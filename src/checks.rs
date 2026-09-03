@@ -618,6 +618,7 @@ pub fn auth_effect(
         timeout: cfg.timeout,
         insecure: cfg.insecure,
         headers: bare,
+        http1_only: cfg.http1_only,
     };
     let anon = match net::fetch(url, &anon_cfg, rate) {
         Ok(a) => a,
@@ -655,27 +656,112 @@ pub fn auth_effect(
     sec
 }
 
+/// What a probe of one method actually established.
+#[derive(Debug, PartialEq, Eq, Clone, Copy)]
+pub enum Verdict {
+    /// 2xx with a body that differs from the GET baseline: the method did
+    /// something of its own.
+    Allowed,
+    /// 2xx, but the body is byte-identical to GET. A framework that renders the
+    /// same page for every verb looks like this; nothing was actioned.
+    SameAsGet,
+    /// The server answered with a redirect at this URL.
+    Redirect,
+    /// The method was refused: 401/403 (auth) or 405/501 (not allowed here).
+    Blocked,
+    /// 404: the path does not exist, which says nothing about the method.
+    NoRoute,
+    /// No response at all (connection dropped or refused).
+    NoResponse,
+    /// Any other status (400, 5xx), reported as-is.
+    Other,
+}
+
+impl Verdict {
+    fn label(self) -> &'static str {
+        match self {
+            Verdict::Allowed => "allowed",
+            Verdict::SameAsGet => "same as GET",
+            Verdict::Redirect => "redirect",
+            Verdict::Blocked => "blocked",
+            Verdict::NoRoute => "no route",
+            Verdict::NoResponse => "no response",
+            Verdict::Other => "other",
+        }
+    }
+}
+
+/// Classify one probe. `same_body_as_get` is only meaningful for a 2xx, and is
+/// what separates "this method did something" from "the framework rendered the
+/// same page it always does".
+pub fn method_verdict(status: u16, same_body_as_get: bool) -> Verdict {
+    match status {
+        0 => Verdict::NoResponse,
+        200..=299 if same_body_as_get => Verdict::SameAsGet,
+        200..=299 => Verdict::Allowed,
+        300..=399 => Verdict::Redirect,
+        401 | 403 | 405 | 501 => Verdict::Blocked,
+        404 => Verdict::NoRoute,
+        _ => Verdict::Other,
+    }
+}
+
 pub fn methods(url: &str, active: bool, cfg: &net::HttpConfig, rate: &mut RateLimiter) -> Section {
     let mut sec = Section::new("HTTP methods");
 
-    let mut probe = vec!["GET", "HEAD", "OPTIONS", "TRACE"];
+    let mut names = vec!["GET", "HEAD", "OPTIONS", "TRACE"];
     if active {
-        probe.extend(["POST", "PUT", "DELETE", "PATCH"]);
+        names.extend(["POST", "PUT", "DELETE", "PATCH"]);
     }
-    for m in probe {
-        let code = net::request(m, url, cfg, rate)
-            .map(|r| r.status().as_u16())
-            .unwrap_or(0);
-        // "allowed" = the method returned a success/redirect (2xx/3xx); anything
-        // else (400/401/403/404/405/501/dropped) is "blocked". The status code is
-        // shown so the raw signal is never hidden.
-        let mark = if matches!(code, 200..=399) {
-            s::green("allowed")
-        } else {
-            s::dim("blocked")
+
+    // GET first, so its body is the baseline every other method is compared to.
+    let mut baseline: Option<u64> = None;
+    let mut results: Vec<(&str, net::Probe, Verdict)> = Vec::new();
+    for m in names {
+        let p = net::probe(m, url, cfg, rate);
+        // HEAD has no body by definition, so comparing it to GET proves nothing.
+        let same = baseline == Some(p.body_hash) && p.body_len > 0 && m != "GET";
+        let v = method_verdict(p.status, same);
+        if m == "GET" && (200..300).contains(&p.status) {
+            baseline = Some(p.body_hash);
+        }
+        results.push((m, p, v));
+    }
+
+    for (m, p, v) in &results {
+        let mark = match v {
+            Verdict::Allowed => s::green(&format!("{:<11}", v.label())),
+            Verdict::SameAsGet | Verdict::Redirect => s::cyan(&format!("{:<11}", v.label())),
+            _ => s::dim(&format!("{:<11}", v.label())),
         };
-        sec.text(format!("  {}  {:>3}  {}", mark, code, s::bold(m)));
+        // On a redirect, show where it pointed instead of silently resolving it.
+        let target = match (v, &p.location) {
+            (Verdict::Redirect, Some(loc)) => format!(" -> {loc}"),
+            _ => String::new(),
+        };
+        sec.text(format!(
+            "  {}  {:>3}  {}{}",
+            mark,
+            p.status,
+            s::bold(m),
+            s::dim(&target)
+        ));
     }
+
+    // Every method 404s: the path is missing, not the methods restricted.
+    if results.iter().all(|(_, p, _)| p.status == 404) {
+        sec.note("no route at this path, so nothing here is a method restriction; rescan a path that exists");
+    } else if active {
+        // Every write verb echoed the GET body: framework default rendering.
+        let writes: Vec<_> = results
+            .iter()
+            .filter(|(m, _, _)| matches!(*m, "POST" | "PUT" | "DELETE" | "PATCH"))
+            .collect();
+        if !writes.is_empty() && writes.iter().all(|(_, _, v)| *v == Verdict::SameAsGet) {
+            sec.note("every write method returned the GET body, which is framework default rendering rather than a finding");
+        }
+    }
+
     if !active {
         sec.note("POST/PUT/DELETE/PATCH not probed; pass --active to include them");
     }
@@ -850,4 +936,50 @@ pub fn nmap(host: &str, vulners: bool, ports: Option<&str>) -> Section {
         }
     }
     sec
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // Issue 2: a 404 means the path is absent, not that the method was refused.
+    // Only 401/403/405/501 are a refusal.
+    #[test]
+    fn missing_path_is_not_a_blocked_method() {
+        assert_eq!(method_verdict(404, false), Verdict::NoRoute);
+        assert_eq!(Verdict::NoRoute.label(), "no route");
+        for refused in [401, 403, 405, 501] {
+            assert_eq!(
+                method_verdict(refused, false),
+                Verdict::Blocked,
+                "{refused} should read as refused"
+            );
+        }
+    }
+
+    // Issue 1: a redirect is its own state. It must never be reported as a 2xx,
+    // which is what following the redirect used to do.
+    #[test]
+    fn redirect_is_its_own_state_not_a_success() {
+        for code in [301, 302, 303, 307, 308] {
+            assert_eq!(method_verdict(code, false), Verdict::Redirect, "{code}");
+        }
+        assert_ne!(method_verdict(307, false), Verdict::Allowed);
+    }
+
+    // Issue 3: a write method that returns the GET body did not action anything,
+    // even though the status is 200.
+    #[test]
+    fn same_body_as_get_is_not_allowed() {
+        assert_eq!(method_verdict(200, true), Verdict::SameAsGet);
+        assert_eq!(method_verdict(200, false), Verdict::Allowed);
+        assert_eq!(Verdict::SameAsGet.label(), "same as GET");
+    }
+
+    #[test]
+    fn no_response_and_other_statuses() {
+        assert_eq!(method_verdict(0, false), Verdict::NoResponse);
+        assert_eq!(method_verdict(400, false), Verdict::Other);
+        assert_eq!(method_verdict(500, false), Verdict::Other);
+    }
 }
