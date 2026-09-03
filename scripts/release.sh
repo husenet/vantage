@@ -38,7 +38,7 @@ else
 fi
 
 step "tests"
-if cargo test --quiet >/tmp/vantage-test.log 2>&1; then
+if cargo test --locked --quiet >/tmp/vantage-test.log 2>&1; then
     ok "cargo test"
 else
     bad "cargo test"
@@ -64,7 +64,7 @@ cargo fmt --check >/dev/null 2>&1 && ok "rustfmt" || warn "rustfmt would reforma
 cargo clippy --all-targets >/dev/null 2>&1 && ok "clippy" || warn "clippy has lints; run: cargo clippy --all-targets"
 
 step "release build"
-if cargo build --release --quiet >/tmp/vantage-build.log 2>&1; then
+if cargo build --locked --release --quiet >/tmp/vantage-build.log 2>&1; then
     ok "target/release/vantage"
 else
     bad "release build"

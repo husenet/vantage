@@ -88,13 +88,13 @@ sudo apt install nmap dnsutils      # Debian / Ubuntu / Kali
 Run straight from a clone:
 
 ```bash
-cargo run --release -- example.com
+cargo run --locked --release -- example.com
 ```
 
 Or install the `vantage` command onto your PATH:
 
 ```bash
-cargo install --path .
+cargo install --locked --path .
 vantage example.com
 ```
 
@@ -179,6 +179,15 @@ advisory against the dependency tree (`cargo audit --deny warnings`, which also
 covers unmaintained, unsound, and yanked crates). rustfmt and clippy are
 reported but do not block. Audit runs every time rather than once, since new
 advisories land against code that has not changed.
+
+`--locked` matters on the install path: `cargo install` ignores `Cargo.lock`
+unless told not to, so without it a client compiles whatever versions resolve
+that day rather than the audited tree.
+
+One provenance caveat if a Windows build is ever cut: `ring` ships 17
+pregenerated NASM object files and links them on Windows x86/x86_64 instead of
+assembling the `.asm` next to them. The Linux build assembles from `.S` source
+and never touches them.
 
 ## License
 
