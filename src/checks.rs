@@ -671,6 +671,11 @@ pub enum Verdict {
     Blocked,
     /// 404: the path does not exist, which says nothing about the method.
     NoRoute,
+    /// 412/428: the request was rejected on a precondition before the server
+    /// ever weighed the method, so this says nothing about whether it is
+    /// permitted. Endpoints that demand a protocol header (tus, for one) land
+    /// here when that header is absent.
+    Precondition,
     /// No response at all (connection dropped or refused).
     NoResponse,
     /// Any other status (400, 5xx), reported as-is.
@@ -685,6 +690,7 @@ impl Verdict {
             Verdict::Redirect => "redirect",
             Verdict::Blocked => "blocked",
             Verdict::NoRoute => "no route",
+            Verdict::Precondition => "precondition",
             Verdict::NoResponse => "no response",
             Verdict::Other => "other",
         }
@@ -702,6 +708,7 @@ pub fn method_verdict(status: u16, same_body_as_get: bool) -> Verdict {
         300..=399 => Verdict::Redirect,
         401 | 403 | 405 | 501 => Verdict::Blocked,
         404 => Verdict::NoRoute,
+        412 | 428 => Verdict::Precondition,
         _ => Verdict::Other,
     }
 }
@@ -728,11 +735,18 @@ pub fn methods(url: &str, active: bool, cfg: &net::HttpConfig, rate: &mut RateLi
         results.push((m, p, v));
     }
 
+    // RFC 9110 requires Allow on a 405, so the server names the methods it
+    // permits. That beats inferring it from probes, which can be rejected for
+    // reasons that have nothing to do with the method.
+    if let Some(a) = results.iter().find_map(|(_, p, _)| p.allow.clone()) {
+        sec.text(format!("  {}: {}", s::magenta("allow"), s::dim(&a)));
+    }
+
     for (m, p, v) in &results {
         let mark = match v {
-            Verdict::Allowed => s::green(&format!("{:<11}", v.label())),
-            Verdict::SameAsGet | Verdict::Redirect => s::cyan(&format!("{:<11}", v.label())),
-            _ => s::dim(&format!("{:<11}", v.label())),
+            Verdict::Allowed => s::green(&format!("{:<12}", v.label())),
+            Verdict::SameAsGet | Verdict::Redirect => s::cyan(&format!("{:<12}", v.label())),
+            _ => s::dim(&format!("{:<12}", v.label())),
         };
         // On a redirect, show where it pointed instead of silently resolving it.
         let target = match (v, &p.location) {
@@ -974,6 +988,18 @@ mod tests {
         assert_eq!(method_verdict(200, true), Verdict::SameAsGet);
         assert_eq!(method_verdict(200, false), Verdict::Allowed);
         assert_eq!(Verdict::SameAsGet.label(), "same as GET");
+    }
+
+    // A tus endpoint rejects any request without Tus-Resumable with a 412
+    // before it ever weighs the method, so 412 must not read as a refusal and
+    // must not be lumped in with unclassified statuses.
+    #[test]
+    fn precondition_is_not_a_refusal() {
+        assert_eq!(method_verdict(412, false), Verdict::Precondition);
+        assert_eq!(method_verdict(428, false), Verdict::Precondition);
+        assert_ne!(method_verdict(412, false), Verdict::Blocked);
+        assert_ne!(method_verdict(412, false), Verdict::Other);
+        assert_eq!(Verdict::Precondition.label(), "precondition");
     }
 
     #[test]

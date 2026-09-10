@@ -113,7 +113,7 @@ OpenSSL system dependency to install).
 | `--disclosure` | Server / framework headers (Server, X-Powered-By, Via, ...) |
 | `--csp` | Parse the CSP and flag `unsafe-inline`/`unsafe-eval`, wildcards, `http:`, missing `default-src` |
 | `--hsts` | Parse + grade HSTS (`max-age`, `includeSubDomains`, `preload`) |
-| `--methods` | Per-method probe; `--active` adds POST/PUT/DELETE/PATCH. Redirects are not followed, so the status is the one returned at the URL you asked for (`redirect 307 GET -> /auth/login`). A `404` reads as `no route`, not `blocked`, since only 401/403/405/501 are a refusal. Response bodies are compared against the GET baseline, so a write method that returns the same page reads as `same as GET` rather than `allowed` |
+| `--methods` | Per-method probe; `--active` adds POST/PUT/DELETE/PATCH. Redirects are not followed, so the status is the one returned at the URL you asked for (`redirect 307 GET -> /auth/login`). A `404` reads as `no route`, not `blocked`, since only 401/403/405/501 are a refusal. Response bodies are compared against the GET baseline, so a write method that returns the same page reads as `same as GET` rather than `allowed`. The server's own `Allow` header is reported when it sends one (RFC 9110 requires it on a 405), since that beats inferring the answer from probes. A `412`/`428` reads as `precondition`, not a refusal: the request was rejected before the method was weighed, which is what an endpoint requiring a protocol header (tus, for one) returns |
 | `--dnsrecon` | DNS records (A/AAAA/NS/MX/TXT/SOA/CNAME) via nslookup |
 | `--nmap` | nmap `-sV` service scan (nmap's default ports; see `--ports`/`--all-ports`) |
 | `--vulners` | `nmap -sV --script vulners` (CVE matching) over the same ports |

@@ -270,6 +270,9 @@ pub struct Probe {
     pub status: u16,
     /// Location header, when the server answered with a redirect.
     pub location: Option<String>,
+    /// Allow header. RFC 9110 requires this on a 405, where it is the server
+    /// naming the methods it permits, which beats inferring it from probes.
+    pub allow: Option<String>,
     /// Hash of the body, so callers can tell responses apart by content and not
     /// just by status.
     pub body_hash: u64,
@@ -291,10 +294,17 @@ pub fn probe(method: &str, url: &str, cfg: &HttpConfig, rate: &mut RateLimiter) 
             .get(reqwest::header::LOCATION)
             .and_then(|v| v.to_str().ok())
             .map(|s| s.to_string());
+        let allow = resp
+            .headers()
+            .get(reqwest::header::ALLOW)
+            .and_then(|v| v.to_str().ok())
+            .map(|s| s.trim().to_string())
+            .filter(|s| !s.is_empty());
         let body = resp.bytes()?;
         Ok(Probe {
             status,
             location,
+            allow,
             body_hash: hash_bytes(&body),
             body_len: body.len(),
         })
@@ -302,6 +312,7 @@ pub fn probe(method: &str, url: &str, cfg: &HttpConfig, rate: &mut RateLimiter) 
     send().unwrap_or(Probe {
         status: 0,
         location: None,
+        allow: None,
         body_hash: 0,
         body_len: 0,
     })
