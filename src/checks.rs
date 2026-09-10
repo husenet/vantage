@@ -721,12 +721,6 @@ pub fn methods(url: &str, active: bool, cfg: &net::HttpConfig, rate: &mut RateLi
         results.push((m, p, v));
     }
 
-    // RFC 9110 requires Allow on a 405, so the server names the methods it
-    // permits. That beats inferring it from probes.
-    if let Some(a) = results.iter().find_map(|(_, p, _)| p.allow.clone()) {
-        sec.text(format!("  {}: {}", s::magenta("allow"), s::dim(&a)));
-    }
-
     // Only the status is reported. A label like "blocked" or "precondition"
     // just restates the code, and guessing wrong is worse than saying nothing.
     // The two annotations kept are the ones the status cannot tell you.

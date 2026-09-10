@@ -270,9 +270,6 @@ pub struct Probe {
     pub status: u16,
     /// Location header, when the server answered with a redirect.
     pub location: Option<String>,
-    /// Allow header. RFC 9110 requires this on a 405, where it is the server
-    /// naming the methods it permits, which beats inferring it from probes.
-    pub allow: Option<String>,
     /// Hash of the body, so callers can tell responses apart by content and not
     /// just by status.
     pub body_hash: u64,
@@ -294,17 +291,10 @@ pub fn probe(method: &str, url: &str, cfg: &HttpConfig, rate: &mut RateLimiter) 
             .get(reqwest::header::LOCATION)
             .and_then(|v| v.to_str().ok())
             .map(|s| s.to_string());
-        let allow = resp
-            .headers()
-            .get(reqwest::header::ALLOW)
-            .and_then(|v| v.to_str().ok())
-            .map(|s| s.trim().to_string())
-            .filter(|s| !s.is_empty());
         let body = resp.bytes()?;
         Ok(Probe {
             status,
             location,
-            allow,
             body_hash: hash_bytes(&body),
             body_len: body.len(),
         })
@@ -312,7 +302,6 @@ pub fn probe(method: &str, url: &str, cfg: &HttpConfig, rate: &mut RateLimiter) 
     send().unwrap_or(Probe {
         status: 0,
         location: None,
-        allow: None,
         body_hash: 0,
         body_len: 0,
     })
@@ -403,6 +392,44 @@ mod tests {
         assert_eq!(a.status, 200);
         assert_eq!(a.body_len, 5);
         assert_eq!(a.body_hash, b.body_hash, "same bytes must hash the same");
+    }
+
+    // The engagement case: a tus endpoint answers POST with 412 until the
+    // protocol header is sent, then it is the one permitted method. --header
+    // has to reach the probe, or every write method reads as a mystery 412.
+    #[test]
+    fn custom_header_reaches_the_method_probe() {
+        let l = TcpListener::bind("127.0.0.1:0").unwrap();
+        let url = format!("http://{}/files", l.local_addr().unwrap());
+        std::thread::spawn(move || {
+            for s in l.incoming().take(2) {
+                let mut s = match s {
+                    Ok(s) => s,
+                    Err(_) => continue,
+                };
+                let mut buf = [0u8; 4096];
+                let n = s.read(&mut buf).unwrap_or(0);
+                let req = String::from_utf8_lossy(&buf[..n]).to_lowercase();
+                let resp = if req.contains("tus-resumable: 1.0.0") {
+                    "HTTP/1.1 201 Created\r\nLocation: /files/abc\r\nContent-Length: 0\r\n\r\n"
+                } else {
+                    "HTTP/1.1 412 Precondition Failed\r\nContent-Length: 0\r\n\r\n"
+                };
+                let _ = s.write_all(resp.as_bytes());
+                let _ = s.flush();
+            }
+        });
+        let mut rate = RateLimiter::new(0);
+        let bare = probe("POST", &url, &cfg(), &mut rate);
+        assert_eq!(bare.status, 412, "tus rejects a request without its header");
+
+        let with = HttpConfig {
+            headers: build_headers(None, &["Tus-Resumable: 1.0.0".to_string()], &[], None, None)
+                .unwrap(),
+            ..cfg()
+        };
+        let ok = probe("POST", &url, &with, &mut rate);
+        assert_eq!(ok.status, 201, "--header must reach the probe");
     }
 
     // Issue 4: the negotiated protocol is named, since the header count depends
