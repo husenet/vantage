@@ -430,11 +430,6 @@ pub fn disclosure(f: &Fetched) -> Section {
             }
         }
     }
-    if let Some((name, ev)) = net::protocol_of(|h| f.get(h)) {
-        any = true;
-        sec.bad(&format!("{name} ({ev})"));
-    }
-
     for b in &backends {
         any = true;
         sec.bad(&format!("backend host in cookie Domain: {}", s::dim(b)));
@@ -726,15 +721,10 @@ pub fn methods(url: &str, active: bool, cfg: &net::HttpConfig, rate: &mut RateLi
         results.push((m, p, v));
     }
 
-    // The server's own statements come first: Allow names the methods it permits
-    // (RFC 9110 requires it on a 405), and a protocol header explains a status
-    // that would otherwise read as a method restriction.
+    // RFC 9110 requires Allow on a 405, so the server names the methods it
+    // permits. That beats inferring it from probes.
     if let Some(a) = results.iter().find_map(|(_, p, _)| p.allow.clone()) {
         sec.text(format!("  {}: {}", s::magenta("allow"), s::dim(&a)));
-    }
-    let protocol = results.iter().find_map(|(_, p, _)| p.protocol.clone());
-    if let Some((name, ev)) = &protocol {
-        sec.text(format!("  {} {}", s::magenta(name), s::dim(&format!("({ev})"))));
     }
 
     // Only the status is reported. A label like "blocked" or "precondition"
@@ -752,16 +742,6 @@ pub fn methods(url: &str, active: bool, cfg: &net::HttpConfig, rate: &mut RateLi
             _ => String::new(),
         };
         sec.text(format!("  {}  {}{}", code, s::bold(m), note));
-    }
-
-    // A protocol that gates on its own header rejects the request before the
-    // method is weighed, so say why rather than leaving the status to puzzle over.
-    if let Some((name, _)) = &protocol {
-        if results.iter().any(|(_, _, v)| *v == Verdict::Precondition) {
-            sec.note(&format!(
-                "{name} rejects requests without its protocol header, so that status is not a method restriction"
-            ));
-        }
     }
 
     // Every method 404s: the path is missing, not the methods restricted.

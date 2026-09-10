@@ -113,7 +113,7 @@ OpenSSL system dependency to install).
 | `--disclosure` | Server / framework headers (Server, X-Powered-By, Via, ...) |
 | `--csp` | Parse the CSP and flag `unsafe-inline`/`unsafe-eval`, wildcards, `http:`, missing `default-src` |
 | `--hsts` | Parse + grade HSTS (`max-age`, `includeSubDomains`, `preload`) |
-| `--methods` | Per-method probe; `--active` adds POST/PUT/DELETE/PATCH. Reports the status only, since a label like "blocked" just restates the code. Redirects are not followed, so the status is the one returned at the URL you asked for, annotated with its target (`307 GET -> /auth/login`). A write method whose body matches GET is annotated `same body as GET`, since a 200 there actioned nothing. The server's own `Allow` header is reported when it sends one (RFC 9110 requires it on a 405). Detected protocols (tus, WebDAV, OData, gRPC, S3, Azure Storage, Elasticsearch, CouchDB, WebSocket, Kubernetes, Vault) are named, because several reject a request that omits their protocol header before weighing the method |
+| `--methods` | Per-method probe; `--active` adds POST/PUT/DELETE/PATCH. Reports the status only, since a label like "blocked" just restates the code. Redirects are not followed, so the status is the one returned at the URL you asked for, annotated with its target (`307 GET -> /auth/login`). A write method whose body matches GET is annotated `same body as GET`, since a 200 there actioned nothing. The server's own `Allow` header is reported when it sends one (RFC 9110 requires it on a 405) |
 | `--dnsrecon` | DNS records (A/AAAA/NS/MX/TXT/SOA/CNAME) via nslookup |
 | `--nmap` | nmap `-sV` service scan (nmap's default ports; see `--ports`/`--all-ports`) |
 | `--vulners` | `nmap -sV --script vulners` (CVE matching) over the same ports |
