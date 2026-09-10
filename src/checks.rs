@@ -430,6 +430,11 @@ pub fn disclosure(f: &Fetched) -> Section {
             }
         }
     }
+    if let Some((name, ev)) = net::protocol_of(|h| f.get(h)) {
+        any = true;
+        sec.bad(&format!("{name} ({ev})"));
+    }
+
     for b in &backends {
         any = true;
         sec.bad(&format!("backend host in cookie Domain: {}", s::dim(b)));
@@ -682,20 +687,6 @@ pub enum Verdict {
     Other,
 }
 
-impl Verdict {
-    fn label(self) -> &'static str {
-        match self {
-            Verdict::Allowed => "allowed",
-            Verdict::SameAsGet => "same as GET",
-            Verdict::Redirect => "redirect",
-            Verdict::Blocked => "blocked",
-            Verdict::NoRoute => "no route",
-            Verdict::Precondition => "precondition",
-            Verdict::NoResponse => "no response",
-            Verdict::Other => "other",
-        }
-    }
-}
 
 /// Classify one probe. `same_body_as_get` is only meaningful for a 2xx, and is
 /// what separates "this method did something" from "the framework rendered the
@@ -735,31 +726,42 @@ pub fn methods(url: &str, active: bool, cfg: &net::HttpConfig, rate: &mut RateLi
         results.push((m, p, v));
     }
 
-    // RFC 9110 requires Allow on a 405, so the server names the methods it
-    // permits. That beats inferring it from probes, which can be rejected for
-    // reasons that have nothing to do with the method.
+    // The server's own statements come first: Allow names the methods it permits
+    // (RFC 9110 requires it on a 405), and a protocol header explains a status
+    // that would otherwise read as a method restriction.
     if let Some(a) = results.iter().find_map(|(_, p, _)| p.allow.clone()) {
         sec.text(format!("  {}: {}", s::magenta("allow"), s::dim(&a)));
     }
+    let protocol = results.iter().find_map(|(_, p, _)| p.protocol.clone());
+    if let Some((name, ev)) = &protocol {
+        sec.text(format!("  {} {}", s::magenta(name), s::dim(&format!("({ev})"))));
+    }
 
+    // Only the status is reported. A label like "blocked" or "precondition"
+    // just restates the code, and guessing wrong is worse than saying nothing.
+    // The two annotations kept are the ones the status cannot tell you.
     for (m, p, v) in &results {
-        let mark = match v {
-            Verdict::Allowed => s::green(&format!("{:<12}", v.label())),
-            Verdict::SameAsGet | Verdict::Redirect => s::cyan(&format!("{:<12}", v.label())),
-            _ => s::dim(&format!("{:<12}", v.label())),
+        let code = if (200..300).contains(&p.status) {
+            s::green(&format!("{:>3}", p.status))
+        } else {
+            s::dim(&format!("{:>3}", p.status))
         };
-        // On a redirect, show where it pointed instead of silently resolving it.
-        let target = match (v, &p.location) {
-            (Verdict::Redirect, Some(loc)) => format!(" -> {loc}"),
+        let note = match (v, &p.location) {
+            (Verdict::Redirect, Some(loc)) => s::dim(&format!(" -> {loc}")),
+            (Verdict::SameAsGet, _) => s::dim("  same body as GET"),
             _ => String::new(),
         };
-        sec.text(format!(
-            "  {}  {:>3}  {}{}",
-            mark,
-            p.status,
-            s::bold(m),
-            s::dim(&target)
-        ));
+        sec.text(format!("  {}  {}{}", code, s::bold(m), note));
+    }
+
+    // A protocol that gates on its own header rejects the request before the
+    // method is weighed, so say why rather than leaving the status to puzzle over.
+    if let Some((name, _)) = &protocol {
+        if results.iter().any(|(_, _, v)| *v == Verdict::Precondition) {
+            sec.note(&format!(
+                "{name} rejects requests without its protocol header, so that status is not a method restriction"
+            ));
+        }
     }
 
     // Every method 404s: the path is missing, not the methods restricted.
@@ -961,7 +963,6 @@ mod tests {
     #[test]
     fn missing_path_is_not_a_blocked_method() {
         assert_eq!(method_verdict(404, false), Verdict::NoRoute);
-        assert_eq!(Verdict::NoRoute.label(), "no route");
         for refused in [401, 403, 405, 501] {
             assert_eq!(
                 method_verdict(refused, false),
@@ -987,7 +988,6 @@ mod tests {
     fn same_body_as_get_is_not_allowed() {
         assert_eq!(method_verdict(200, true), Verdict::SameAsGet);
         assert_eq!(method_verdict(200, false), Verdict::Allowed);
-        assert_eq!(Verdict::SameAsGet.label(), "same as GET");
     }
 
     // A tus endpoint rejects any request without Tus-Resumable with a 412
@@ -999,7 +999,6 @@ mod tests {
         assert_eq!(method_verdict(428, false), Verdict::Precondition);
         assert_ne!(method_verdict(412, false), Verdict::Blocked);
         assert_ne!(method_verdict(412, false), Verdict::Other);
-        assert_eq!(Verdict::Precondition.label(), "precondition");
     }
 
     #[test]

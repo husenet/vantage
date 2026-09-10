@@ -10,6 +10,45 @@ use std::time::{Duration, Instant};
 
 pub const USER_AGENT: &str = "vantage/0.9 (+https://github.com/husenet/vantage)";
 
+/// Protocols and APIs identifiable from response headers alone. Naming one
+/// matters because several of them reject any request that omits their protocol
+/// header before ever weighing the method, which otherwise reads as a method
+/// restriction. Each entry is (name, headers that identify it).
+pub const PROTOCOLS: &[(&str, &[&str])] = &[
+    (
+        "tus resumable upload",
+        &["tus-resumable", "tus-version", "tus-extension", "tus-max-size"],
+    ),
+    ("WebDAV", &["dav", "ms-author-via"]),
+    ("OData", &["odata-version", "dataserviceversion"]),
+    ("gRPC", &["grpc-status", "grpc-encoding", "grpc-accept-encoding"]),
+    (
+        "S3-compatible object storage",
+        &["x-amz-request-id", "x-amz-id-2", "x-amz-bucket-region"],
+    ),
+    ("Azure Storage", &["x-ms-request-id", "x-ms-version"]),
+    (
+        "Elasticsearch / OpenSearch",
+        &["x-elastic-product", "x-opensearch-version"],
+    ),
+    ("CouchDB", &["x-couchdb-body-time", "x-couch-request-id"]),
+    (
+        "WebSocket upgrade",
+        &["sec-websocket-version", "sec-websocket-accept"],
+    ),
+    ("Kubernetes API", &["x-kubernetes-pf-flowschema-uid"]),
+    ("HashiCorp Vault", &["x-vault-index", "x-vault-token"]),
+];
+
+/// Find the protocol a response advertises, as ("name", "header: value").
+pub fn protocol_of(get: impl Fn(&str) -> Option<String>) -> Option<(String, String)> {
+    PROTOCOLS.iter().find_map(|(name, headers)| {
+        headers.iter().find_map(|h| {
+            get(h).map(|v| ((*name).to_string(), format!("{h}: {}", v.trim())))
+        })
+    })
+}
+
 /// Shared request settings: timeout, TLS strictness, and the default headers
 /// (User-Agent plus any auth the user passed).
 pub struct HttpConfig {
@@ -273,6 +312,8 @@ pub struct Probe {
     /// Allow header. RFC 9110 requires this on a 405, where it is the server
     /// naming the methods it permits, which beats inferring it from probes.
     pub allow: Option<String>,
+    /// Protocol this response advertised, as (name, "header: value").
+    pub protocol: Option<(String, String)>,
     /// Hash of the body, so callers can tell responses apart by content and not
     /// just by status.
     pub body_hash: u64,
@@ -300,11 +341,18 @@ pub fn probe(method: &str, url: &str, cfg: &HttpConfig, rate: &mut RateLimiter) 
             .and_then(|v| v.to_str().ok())
             .map(|s| s.trim().to_string())
             .filter(|s| !s.is_empty());
+        let protocol = protocol_of(|h| {
+            resp.headers()
+                .get(h)
+                .and_then(|v| v.to_str().ok())
+                .map(|v| v.to_string())
+        });
         let body = resp.bytes()?;
         Ok(Probe {
             status,
             location,
             allow,
+            protocol,
             body_hash: hash_bytes(&body),
             body_len: body.len(),
         })
@@ -313,6 +361,7 @@ pub fn probe(method: &str, url: &str, cfg: &HttpConfig, rate: &mut RateLimiter) 
         status: 0,
         location: None,
         allow: None,
+        protocol: None,
         body_hash: 0,
         body_len: 0,
     })
