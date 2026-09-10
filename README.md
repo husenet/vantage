@@ -44,15 +44,15 @@ HTTP 200
   ...
 
   security headers
-  - strict-transport-security  (HSTS - forces HTTPS)
-  - content-security-policy  (CSP - mitigates XSS / injection)
-  - x-frame-options  (clickjacking protection)
-  - x-content-type-options  (MIME-sniffing protection)
-  - referrer-policy  (controls referrer leakage)
-  - permissions-policy  (restricts powerful browser features)
-  - cross-origin-opener-policy  (COOP)
-  - cross-origin-embedder-policy  (COEP)
-  - cross-origin-resource-policy  (CORP)
+  - strict-transport-security
+  - content-security-policy
+  - x-frame-options
+  - x-content-type-options
+  - referrer-policy
+  - permissions-policy
+  - cross-origin-opener-policy
+  - cross-origin-embedder-policy
+  - cross-origin-resource-policy
 
 == Cookies =====================================================
     no Set-Cookie headers

@@ -6,16 +6,16 @@ use crate::spin::Spinner;
 use crate::style as s;
 use std::process::Command;
 
-const SECURITY_HEADERS: &[(&str, &str)] = &[
-    ("strict-transport-security", "HSTS - forces HTTPS"),
-    ("content-security-policy", "CSP - mitigates XSS / injection"),
-    ("x-frame-options", "clickjacking protection"),
-    ("x-content-type-options", "MIME-sniffing protection"),
-    ("referrer-policy", "controls referrer leakage"),
-    ("permissions-policy", "restricts powerful browser features"),
-    ("cross-origin-opener-policy", "COOP - isolates the browsing context"),
-    ("cross-origin-embedder-policy", "COEP - requires cross-origin resources to opt in"),
-    ("cross-origin-resource-policy", "CORP - limits which sites can load the resource"),
+const SECURITY_HEADERS: &[&str] = &[
+    "strict-transport-security",
+    "content-security-policy",
+    "x-frame-options",
+    "x-content-type-options",
+    "referrer-policy",
+    "permissions-policy",
+    "cross-origin-opener-policy",
+    "cross-origin-embedder-policy",
+    "cross-origin-resource-policy",
 ];
 
 /// Shortest HSTS max-age generally considered adequate (6 months).
@@ -214,9 +214,9 @@ pub fn headers(f: &Fetched) -> Section {
     }
     sec.text("");
     sec.text(s::bold("  security headers"));
-    for (name, desc) in SECURITY_HEADERS {
+    for name in SECURITY_HEADERS {
         match f.get(name) {
-            None => sec.bad(&format!("{name} ({desc})")),
+            None => sec.bad(name),
             Some(v) => match header_ineffective(name, &v, f) {
                 None => sec.good(name),
                 Some(why) => sec.bad(&format!("{name} ineffective ({why})")),
