@@ -137,6 +137,7 @@ With **no module flags**, vantage runs the default HTTP audit:
 | `--active` | With `--methods`, also probe POST/PUT/DELETE/PATCH |
 | `--timeout <s>` | Per-request timeout (default 15) |
 | `--insecure` | Accept invalid/self-signed TLS certificates |
+| `--follow` | Follow redirects. Off by default, so the checks grade the response at the URL you gave (a 301 to the www host, say) and the status line shows where it points. With `--follow` they grade the final page instead |
 | `--http1` | Force HTTP/1.1 instead of negotiating HTTP/2. The status line names the protocol, since hop-by-hop headers (`Connection`, `Transfer-Encoding`) exist in 1.1 but not 2, so the header count differs between them |
 | `--json` | Machine-readable JSON |
 | `--no-color` | Disable ANSI colors |

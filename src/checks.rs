@@ -619,6 +619,7 @@ pub fn auth_effect(
         insecure: cfg.insecure,
         headers: bare,
         http1_only: cfg.http1_only,
+        follow: cfg.follow,
     };
     let anon = match net::fetch(url, &anon_cfg, rate) {
         Ok(a) => a,

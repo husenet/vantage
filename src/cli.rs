@@ -103,6 +103,9 @@ struct Args {
     /// force HTTP/1.1 instead of negotiating HTTP/2
     #[arg(long = "http1")]
     http1: bool,
+    /// follow redirects (default is to report on the URL as given)
+    #[arg(long)]
+    follow: bool,
     /// emit machine-readable JSON
     #[arg(long)]
     json: bool,
@@ -236,6 +239,7 @@ pub fn run() -> i32 {
         insecure: args.insecure,
         headers,
         http1_only: args.http1,
+        follow: args.follow,
     };
 
     let authenticated = args.user_agent.is_some()
@@ -448,8 +452,13 @@ fn scan_one(
                     let mut line = format!("{} {}", f.version, f.status);
                     if f.redirected {
                         line += &format!("  (redirected to {})", f.url);
+                    } else if let Some(loc) = &f.location {
+                        line += &format!("  -> {loc}");
                     }
                     println!("{}", style::dim(&line));
+                    if !f.redirected && f.location.is_some() {
+                        println!("{}", style::dim("  redirect not followed; pass --follow to scan the target"));
+                    }
                     // Cross-host redirect guard: reqwest drops Authorization on a
                     // cross-origin redirect but not cookies/custom headers, so
                     // credentials can still reach an unexpected host.

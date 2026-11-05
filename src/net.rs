@@ -18,6 +18,9 @@ pub struct HttpConfig {
     pub headers: HeaderMap,
     /// Force HTTP/1.1 instead of letting ALPN negotiate HTTP/2.
     pub http1_only: bool,
+    /// Follow redirects. Off by default so every check reports on the URL that
+    /// was asked for, not wherever the server sends a browser.
+    pub follow: bool,
 }
 
 /// Build the default-header map from the CLI auth inputs. Returns a
@@ -123,6 +126,7 @@ pub fn with_origin(cfg: &HttpConfig, origin: &str) -> HttpConfig {
         insecure: cfg.insecure,
         headers,
         http1_only: cfg.http1_only,
+        follow: cfg.follow,
     }
 }
 
@@ -206,6 +210,8 @@ pub struct Fetched {
     /// True only if the final URL differs from the request after URL
     /// normalization (so a bare host gaining a trailing "/" does not count).
     pub redirected: bool,
+    /// Location header of a redirect that was not followed.
+    pub location: Option<String>,
     /// Length of the decoded response body, used to compare authenticated vs
     /// unauthenticated responses in the auth-effectiveness check.
     pub body_len: usize,
@@ -307,10 +313,11 @@ pub fn probe(method: &str, url: &str, cfg: &HttpConfig, rate: &mut RateLimiter) 
     })
 }
 
-/// GET a URL (following redirects). 4xx/5xx are captured, not raised.
+/// GET a URL. Redirects are followed only with `cfg.follow`; 4xx/5xx are
+/// captured, not raised.
 pub fn fetch(url: &str, cfg: &HttpConfig, rate: &mut RateLimiter) -> reqwest::Result<Fetched> {
     rate.wait();
-    let resp = client(cfg, true)?.get(url).send()?;
+    let resp = client(cfg, cfg.follow)?.get(url).send()?;
     let requested = reqwest::Url::parse(url)
         .map(|u| u.to_string())
         .unwrap_or_else(|_| url.to_string());
@@ -320,12 +327,18 @@ pub fn fetch(url: &str, cfg: &HttpConfig, rate: &mut RateLimiter) -> reqwest::Re
     let headers = resp.headers().clone();
     let is_https = final_url.starts_with("https://");
     let redirected = final_url != requested;
+    let location = resp
+        .headers()
+        .get(reqwest::header::LOCATION)
+        .and_then(|v| v.to_str().ok())
+        .map(|s| s.to_string());
     let version = version_str(resp.version()).to_string();
     let body_len = resp.text().map(|t| t.len()).unwrap_or(0);
     Ok(Fetched {
         status,
         is_https,
         redirected,
+        location,
         url: final_url,
         headers,
         body_len,
@@ -345,6 +358,7 @@ mod tests {
             insecure: true,
             headers: build_headers(None, &[], &[], None, None).unwrap(),
             http1_only: false,
+            follow: false,
         }
     }
 
@@ -379,6 +393,27 @@ mod tests {
         let p = probe("GET", &url, &cfg(), &mut rate);
         assert_eq!(p.status, 307, "must not follow the redirect");
         assert_eq!(p.location.as_deref(), Some("/auth/login"));
+    }
+
+    // fetch() reports on the URL as given. A 301 to the www host or a 302 to
+    // a login page is the answer for that URL, not a detour on the way to
+    // the real one, unless --follow says otherwise.
+    #[test]
+    fn fetch_does_not_follow_redirects_unless_asked() {
+        let url = serve(
+            "HTTP/1.1 301 Moved Permanently\r\nLocation: http://127.0.0.1:1/\r\nContent-Length: 0\r\n\r\n",
+        );
+        let mut rate = RateLimiter::new(0);
+        let f = fetch(&url, &cfg(), &mut rate).unwrap();
+        assert_eq!(f.status, 301);
+        assert!(!f.redirected);
+        assert_eq!(f.location.as_deref(), Some("http://127.0.0.1:1/"));
+
+        let following = HttpConfig { follow: true, ..cfg() };
+        let err = fetch(&url, &following, &mut rate);
+        // Nothing listens on the target, so following it is an error rather than
+        // a 301. That it tried at all is the point.
+        assert!(err.is_err(), "follow: true must chase the Location header");
     }
 
     // Issue 3: the probe reads the body, so identical responses hash the same
